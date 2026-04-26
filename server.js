@@ -557,7 +557,7 @@ async function callOpenRouterDirect(prompt) {
   return text.trim();
 }
 
-const OPENCLAW_MAIN = "C:\\Users\\BIT\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
+// const OPENCLAW_MAIN = "C:\\Users\\BIT\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
 
 async function callDirectWithRetry(prompt, logName) {
   let attempt = 0;
