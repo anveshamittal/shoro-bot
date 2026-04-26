@@ -8,6 +8,8 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const sharp = require("sharp");
+const FormData = require("form-data");
 
 const app = express();
 app.use(express.json());
@@ -42,11 +44,26 @@ const OPENCLAW_BIN = (() => {
 })();
 
 const TELEGRAM_MAX_TEXT = 3900;
+const TELEGRAM_MAX_CAPTION = 900;
 const OPENCLAW_MAX_RETRIES = 3;
 const RECENT_TOPICS_FILE = "recent_topics.json";
 const RECENT_TOPICS_LIMIT = 10;
 const OR_MODEL = process.env.OR_MODEL || "google/gemini-2.0-flash-lite-001";
 const OR_API_KEY = process.env.OPENROUTER_API_KEY || "";
+const OPENCLAW_MAIN = (() => {
+  if (process.env.OPENCLAW_MAIN) return process.env.OPENCLAW_MAIN;
+  const candidates = [
+    path.join(process.env.APPDATA || "", "npm", "node_modules", "openclaw", "openclaw.mjs"),
+    path.join(process.env.APPDATA || "", "npm", "node_modules", "openclaw", "dist", "openclaw.mjs"),
+    path.join(__dirname, "node_modules", "openclaw", "openclaw.mjs"),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  return null;
+})();
 
 // ─── 2. CATEGORIES & SUBREDDITS ─────────────────────────────────────────────
 
@@ -359,24 +376,324 @@ function buildImageConceptPrompt(topic, post) {
     `TOPIC: ${topic}`,
     `POST CONTENT: ${post}`,
     "",
-    "Follow these steps:",
-    "1. Topic -> Headline (e.g., 'X does Y in Z time')",
-    "2. Decide Tone (Controversial, Opinion, or Informational)",
-    "3. Build Visual Concept (Subject, Emotion, Scene)",
+    "IMPORTANT:",
+    "The visual description must NOT include any text, words, typography, letters, logos, captions, labels, or signs.",
+    "Only describe background, scene, lighting, mood, composition, and texture.",
     "",
-    "OUTPUT FORMAT:",
-    "Headline: [Punchy Headline]",
-    "Visual: [Detailed description for image generator]",
+    "Return ONLY valid JSON in exactly this shape:",
+    '{"headline":"...","visual":"...","highlight":"...","subtext":"..."}',
     "",
-    "No other text."
+    "Field requirements:",
+    "headline: 4-10 words, punchy, no hashtags",
+    "visual: detailed cinematic background prompt with no text elements",
+    "highlight: 1-4 words to emphasize from headline",
+    "subtext: short supporting line under headline (optional but preferred)",
+    "",
+    "No markdown. No code fences. JSON only."
   ].join("\n");
 }
 
 async function callImageAPI(prompt) {
   console.log("🎨 Calling Pollinations.ai for image...");
-  const cleanedPrompt = encodeURIComponent(prompt.replace(/[\n\r]/g, " ").trim());
+  const safePrompt = `${prompt}, no text, no letters, no typography, no logo, no watermark`;
+  const cleanedPrompt = encodeURIComponent(safePrompt.replace(/[\n\r]/g, " ").trim());
   const seed = Math.floor(Math.random() * 1000000);
   return `https://image.pollinations.ai/prompt/${cleanedPrompt}?width=1024&height=1024&nologo=true&seed=${seed}`;
+}
+
+function extractFirstJsonObject(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start === -1 || end === -1 || end <= start) return null;
+    try {
+      return JSON.parse(raw.slice(start, end + 1));
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+function normalizeImageConcept(rawConcept, topic) {
+  const parsed = extractFirstJsonObject(rawConcept) || {};
+  const fallbackHeadline = String(topic || "Founder reality check").slice(0, 90).trim() || "Founder reality check";
+
+  const headline = String(parsed.headline || fallbackHeadline).replace(/\s+/g, " ").trim().slice(0, 100);
+  const visual = String(parsed.visual || `cinematic editorial portrait background, moody lighting, shallow depth of field, startup office atmosphere, no text elements`).replace(/\s+/g, " ").trim();
+  const highlight = String(parsed.highlight || headline.split(" ").slice(0, 2).join(" ")).replace(/\s+/g, " ").trim().slice(0, 40);
+  const subtext = String(parsed.subtext || "").replace(/\s+/g, " ").trim().slice(0, 120);
+
+  return { headline, visual, highlight, subtext };
+}
+
+function escapeXml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function estimateTextWidth(text, fontSize, widthFactor = 0.56) {
+  return String(text || "").length * fontSize * widthFactor;
+}
+
+function normalizeToken(value) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function getHighlightTerms(highlight, headline) {
+  const stopWords = new Set([
+    "the", "and", "for", "with", "that", "this", "from", "into", "your", "you",
+    "are", "was", "were", "have", "has", "had", "not", "but", "out", "too", "just"
+  ]);
+
+  const seed = `${String(highlight || "")} ${String(headline || "")}`;
+  const tokens = seed
+    .split(/\s+/)
+    .map((t) => normalizeToken(t))
+    .filter((t) => t.length >= 4 && !stopWords.has(t));
+
+  return Array.from(new Set(tokens)).slice(0, 6);
+}
+
+function pickFallbackHighlightTerm(lines) {
+  const words = (Array.isArray(lines) ? lines.join(" ") : String(lines || ""))
+    .split(/\s+/)
+    .map((w) => normalizeToken(w))
+    .filter((w) => w.length >= 5);
+
+  if (!words.length) return "";
+  words.sort((a, b) => b.length - a.length);
+  return words[0];
+}
+
+function wrapText(text, maxWidthPx, fontSize, maxLines, widthFactor = 0.56) {
+  const words = String(text || "").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+
+  const lines = [];
+  let current = "";
+  const maxCharsChunk = Math.max(3, Math.floor(maxWidthPx / Math.max(1, fontSize * widthFactor)));
+
+  for (const word of words) {
+    if (estimateTextWidth(word, fontSize, widthFactor) > maxWidthPx) {
+      const chunks = [];
+      let source = word;
+      while (source.length > maxCharsChunk) {
+        chunks.push(source.slice(0, maxCharsChunk));
+        source = source.slice(maxCharsChunk);
+      }
+      if (source) chunks.push(source);
+
+      for (const chunk of chunks) {
+        const nextChunk = current ? `${current} ${chunk}` : chunk;
+        if (estimateTextWidth(nextChunk, fontSize, widthFactor) <= maxWidthPx) {
+          current = nextChunk;
+          continue;
+        }
+        if (current) {
+          lines.push(current);
+          if (lines.length >= maxLines) {
+            lines[maxLines - 1] = `${lines[maxLines - 1].replace(/\.\.\.$/, "")}...`;
+            return lines;
+          }
+        }
+        current = chunk;
+      }
+      continue;
+    }
+
+    const next = current ? `${current} ${word}` : word;
+    if (estimateTextWidth(next, fontSize, widthFactor) <= maxWidthPx) {
+      current = next;
+      continue;
+    }
+
+    if (current) {
+      lines.push(current);
+      if (lines.length >= maxLines) {
+        lines[maxLines - 1] = `${lines[maxLines - 1].replace(/\.\.\.$/, "")}...`;
+        return lines;
+      }
+    }
+    current = word;
+  }
+
+  if (current && lines.length < maxLines) {
+    lines.push(current);
+  } else if (current && lines.length >= maxLines) {
+    lines[maxLines - 1] = `${lines[maxLines - 1].replace(/\.\.\.$/, "")}...`;
+  }
+
+  return lines;
+}
+
+function fitOverlayLayout(width, height, imageConcept) {
+  const left = Math.round(width * 0.08);
+  const right = Math.round(width * 0.08);
+  const maxWidth = Math.max(220, width - left - right);
+
+  let headlineSize = Math.max(40, Math.round(width * 0.066));
+  const minHeadlineSize = Math.max(28, Math.round(width * 0.034));
+
+  while (headlineSize >= minHeadlineSize) {
+    const subtextSize = Math.max(20, Math.round(headlineSize * 0.46));
+
+    const headlineLines = wrapText(imageConcept.headline, maxWidth, headlineSize, 3, 0.62);
+    const subtextLines = wrapText(imageConcept.subtext, maxWidth, subtextSize, 2, 0.54);
+    const lineHeight = Math.round(headlineSize * 1.08);
+    const overlayTop = Math.round(height * 0.62);
+    const subLineHeight = Math.round(subtextSize * 1.24);
+    const subtextStartY = overlayTop + (headlineLines.length * lineHeight) + Math.round(headlineSize * 0.65);
+    const bottom = subtextStartY + Math.max(0, (subtextLines.length - 1) * subLineHeight);
+    const maxBottom = height - Math.round(height * 0.08);
+
+    const headFits = headlineLines.every((line) => estimateTextWidth(line, headlineSize, 0.62) <= maxWidth);
+    const subFits = subtextLines.every((line) => estimateTextWidth(line, subtextSize, 0.54) <= maxWidth);
+    const heightFits = bottom <= maxBottom;
+
+    if (headFits && subFits && heightFits) {
+      return {
+        left,
+        headlineSize,
+        subtextSize,
+        headlineLines,
+        subtextLines,
+        lineHeight,
+        overlayTop,
+        subtextStartY,
+        subLineHeight,
+      };
+    }
+
+    headlineSize -= 3;
+  }
+
+  const fallbackHeadlineSize = minHeadlineSize;
+  return {
+    left,
+    headlineSize: fallbackHeadlineSize,
+    subtextSize: Math.max(18, Math.round(fallbackHeadlineSize * 0.45)),
+    headlineLines: wrapText(imageConcept.headline, maxWidth, fallbackHeadlineSize, 3, 0.62),
+    subtextLines: wrapText(imageConcept.subtext, maxWidth, Math.max(18, Math.round(fallbackHeadlineSize * 0.45)), 2, 0.54),
+    lineHeight: Math.round(fallbackHeadlineSize * 1.08),
+    overlayTop: Math.round(height * 0.62),
+    subtextStartY: Math.round(height * 0.62) + Math.round(fallbackHeadlineSize * 3.2),
+    subLineHeight: Math.round(Math.max(18, Math.round(fallbackHeadlineSize * 0.45)) * 1.24),
+  };
+}
+
+function buildHighlightedLineTspans(line, highlightTerms, forcedTerm = "") {
+  const parts = String(line || "").match(/[A-Za-z0-9']+|[^A-Za-z0-9']+/g) || [];
+  const termSet = new Set((highlightTerms || []).map((t) => normalizeToken(t)).filter(Boolean));
+  const force = normalizeToken(forcedTerm);
+
+  let matched = false;
+  const svg = parts
+    .map((part) => {
+      const token = normalizeToken(part);
+      if (!token) return `<tspan fill="#f8fafc">${escapeXml(part)}</tspan>`;
+
+      const shouldHighlight = termSet.has(token) || (force && token === force);
+      if (shouldHighlight) matched = true;
+      const color = shouldHighlight ? "#fbbf24" : "#f8fafc";
+      return `<tspan fill="${color}">${escapeXml(part)}</tspan>`;
+    })
+    .join("");
+
+  return { svg, matched };
+}
+
+function buildOverlaySvg(width, height, imageConcept) {
+  const layout = fitOverlayLayout(width, height, imageConcept);
+  const {
+    left,
+    headlineSize,
+    subtextSize,
+    headlineLines,
+    subtextLines,
+    lineHeight,
+    overlayTop,
+    subtextStartY,
+    subLineHeight,
+  } = layout;
+
+  const fontStack = "Montserrat, Poppins, Inter, Arial, Helvetica, sans-serif";
+
+  const highlightTerms = getHighlightTerms(imageConcept.highlight, imageConcept.headline);
+  const lineStates = headlineLines.map((line) => buildHighlightedLineTspans(line, highlightTerms));
+  let hasHighlight = lineStates.some((state) => state.matched);
+
+  if (!hasHighlight && headlineLines.length > 0) {
+    const forced = pickFallbackHighlightTerm(headlineLines);
+    if (forced) {
+      lineStates[0] = buildHighlightedLineTspans(headlineLines[0], highlightTerms, forced);
+      hasHighlight = lineStates[0].matched;
+    }
+  }
+
+  const headlineBlocks = headlineLines
+    .map((line, index) => `<text x="${left}" y="${overlayTop + (index * lineHeight)}" font-family="${fontStack}" font-size="${headlineSize}" font-weight="800" filter="url(#shadow)">${lineStates[index]?.svg || `<tspan fill="#f8fafc">${escapeXml(line)}</tspan>`}</text>`)
+    .join("");
+
+  const subtextBlocks = subtextLines
+    .map((line, index) => `<text x="${left}" y="${subtextStartY + (index * subLineHeight)}" font-family="${fontStack}" font-size="${subtextSize}" font-weight="500" fill="#e2e8f0" filter="url(#shadow)">${escapeXml(line)}</text>`)
+    .join("");
+
+  return `
+<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+      <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="rgba(0,0,0,0.88)"/>
+    </filter>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="rgba(0,0,0,0.05)"/>
+      <stop offset="55%" stop-color="rgba(0,0,0,0.58)"/>
+      <stop offset="100%" stop-color="rgba(0,0,0,0.92)"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="${width}" height="${height}" fill="url(#fade)"/>
+  ${headlineBlocks}
+  ${subtextBlocks}
+</svg>`;
+}
+
+async function renderImageWithText(backgroundImageUrl, imageConcept) {
+  const response = await axios.get(backgroundImageUrl, {
+    responseType: "arraybuffer",
+    timeout: 45000,
+  });
+
+  const background = Buffer.from(response.data);
+  const metadata = await sharp(background).metadata();
+  const width = metadata.width || 1024;
+  const height = metadata.height || 1024;
+
+  const overlaySvg = buildOverlaySvg(width, height, imageConcept);
+  const outputPath = path.join(os.tmpdir(), `shoro-render-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`);
+
+  await sharp(background)
+    .composite([{ input: Buffer.from(overlaySvg), top: 0, left: 0 }])
+    .jpeg({ quality: 92, mozjpeg: true })
+    .toFile(outputPath);
+
+  return outputPath;
+}
+
+function imageConceptToText(imageConcept) {
+  return [
+    `Headline: ${imageConcept.headline}`,
+    `Highlight: ${imageConcept.highlight || "-"}`,
+    `Subtext: ${imageConcept.subtext || "-"}`,
+    `Visual: ${imageConcept.visual}`,
+  ].join("\n");
 }
 
 // ─── 5. DATA FETCHING (Reddit & Hacker News) ────────────────────────────────
@@ -584,6 +901,10 @@ async function callDirectWithRetry(prompt, logName) {
 
 function getAIResponse(prompt, sessionId) {
   return new Promise((resolve, reject) => {
+    if (!OPENCLAW_MAIN) {
+      return reject(new Error("OpenClaw executable not found. Set OPENCLAW_MAIN to the openclaw.mjs path."));
+    }
+
     const parseStdout = (stdout, stderr, exitCode) => {
       const textOut = (stdout || "").trim();
       const jsonStart = textOut.lastIndexOf("{");
@@ -753,12 +1074,15 @@ async function runAutopostPipeline(category = null) {
 
   console.log("🎨 Designing image concept...");
   const imageConceptPrompt = buildImageConceptPrompt(chosenStory.trim(), post);
-  const imageConcept = await callDirectWithRetry(imageConceptPrompt, "image-concept");
-  const imageUrl = await callImageAPI(imageConcept);
+  const imageConceptRaw = await callDirectWithRetry(imageConceptPrompt, "image-concept");
+  const imageConcept = normalizeImageConcept(imageConceptRaw, chosenStory.trim());
+  const imageBackgroundUrl = await callImageAPI(imageConcept.visual);
+  const imageUrl = await renderImageWithText(imageBackgroundUrl, imageConcept);
 
   assertPost(post, "autopost");
   rememberTopic(chosenStory.trim());
   logStage("FINAL_POST", post);
+  logStage("IMAGE_CONCEPT", imageConcept);
   return { post, source, chosenStory: chosenStory.trim(), imageUrl, imageConcept };
 }
 
@@ -781,12 +1105,15 @@ async function runTopicPostPipeline(topic) {
 
   console.log("🎨 Designing image concept...");
   const imageConceptPrompt = buildImageConceptPrompt(topic, post);
-  const imageConcept = await callDirectWithRetry(imageConceptPrompt, "image-concept-manual");
-  const imageUrl = await callImageAPI(imageConcept);
+  const imageConceptRaw = await callDirectWithRetry(imageConceptPrompt, "image-concept-manual");
+  const imageConcept = normalizeImageConcept(imageConceptRaw, topic);
+  const imageBackgroundUrl = await callImageAPI(imageConcept.visual);
+  const imageUrl = await renderImageWithText(imageBackgroundUrl, imageConcept);
 
   assertPost(post, "topic-post");
   rememberTopic(topic);
   logStage("FINAL_POST", post);
+  logStage("IMAGE_CONCEPT", imageConcept);
   return { post, imageUrl, imageConcept };
 }
 
@@ -816,8 +1143,10 @@ async function runResearchPipeline(topic) {
 
   console.log("🎨 Designing image concept...");
   const imageConceptPrompt = buildImageConceptPrompt(topic, socialPost);
-  const imageConcept = await callDirectWithRetry(imageConceptPrompt, "image-concept-research");
-  const imageUrl = await callImageAPI(imageConcept);
+  const imageConceptRaw = await callDirectWithRetry(imageConceptPrompt, "image-concept-research");
+  const imageConcept = normalizeImageConcept(imageConceptRaw, topic);
+  const imageBackgroundUrl = await callImageAPI(imageConcept.visual);
+  const imageUrl = await renderImageWithText(imageBackgroundUrl, imageConcept);
 
   rememberTopic(topic);
   logStage("CONTENT_BRIEF", researchBrief);
@@ -851,12 +1180,30 @@ async function safeSendMessage(chatId, text) {
 
 async function sendPhoto(chatId, photoUrl, caption) {
   try {
-    await axios.post(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, {
-      chat_id: chatId,
-      photo: photoUrl,
-      caption: clampText(caption),
-      parse_mode: "Markdown"
+    const isRemoteUrl = /^https?:\/\//i.test(String(photoUrl || ""));
+    if (isRemoteUrl) {
+      await axios.post(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, {
+        chat_id: chatId,
+        photo: photoUrl,
+        caption: clampText(caption)?.slice(0, TELEGRAM_MAX_CAPTION)
+      });
+      return;
+    }
+
+    const form = new FormData();
+    form.append("chat_id", String(chatId));
+    form.append("caption", clampText(caption)?.slice(0, TELEGRAM_MAX_CAPTION) || "");
+    form.append("photo", fs.createReadStream(photoUrl));
+
+    await axios.post(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, form, {
+      headers: form.getHeaders(),
+      maxBodyLength: Infinity,
+      timeout: 30000,
     });
+
+    try {
+      fs.unlink(photoUrl, () => {});
+    } catch (_) { }
   } catch (err) {
     console.error(`Telegram sendPhoto failed: ${err.message}`);
     await safeSendMessage(chatId, `🖼️ Image: ${photoUrl}\n\n${caption}`);
@@ -891,7 +1238,7 @@ app.post("/webhook", async (req, res) => {
         await safeSendMessage(chatId, "⏳ Scanning startup signals, picking story, and writing post...");
         const { post, imageUrl, imageConcept } = await runGeneratePipeline();
         await sendPhoto(chatId, imageUrl, post);
-        await safeSendMessage(chatId, `🧠 **Visual Spec**\n\n${imageConcept}`);
+        await safeSendMessage(chatId, `🧠 Visual Spec\n\n${imageConceptToText(imageConcept)}`);
 
       } else if (text.startsWith("/post ")) {
         const topic = text.replace("/post", "").trim();
@@ -899,7 +1246,7 @@ app.post("/webhook", async (req, res) => {
         await safeSendMessage(chatId, `⏳ Writing post about "${topic}"...`);
         const { post, imageUrl, imageConcept } = await runTopicPostPipeline(topic);
         await sendPhoto(chatId, imageUrl, post);
-        await safeSendMessage(chatId, `🧠 **Visual Spec**\n\n${imageConcept}`);
+        await safeSendMessage(chatId, `🧠 Visual Spec\n\n${imageConceptToText(imageConcept)}`);
 
       } else if (text.startsWith("/research ")) {
         const goal = text.replace("/research", "").trim();
@@ -907,7 +1254,7 @@ app.post("/webhook", async (req, res) => {
         await safeSendMessage(chatId, `🚀 Researching "${goal}" autonomously...`);
         const result = await runResearchPipeline(goal);
         await sendPhoto(chatId, result.imageUrl, result.post);
-        await safeSendMessage(chatId, `🧠 **Visual Spec**\n\n${result.imageConcept}`);
+        await safeSendMessage(chatId, `🧠 Visual Spec\n\n${imageConceptToText(result.imageConcept)}`);
         await safeSendMessage(chatId, `🔗 Sources:\n${result.sources}`);
 
       } else if (text.toLowerCase() === "autopost" || text.startsWith("/autopost")) {
@@ -917,7 +1264,7 @@ app.post("/webhook", async (req, res) => {
         const { post, source, chosenStory, imageUrl, imageConcept } = await runAutopostPipeline(category);
         await safeSendMessage(chatId, `📡 Sources: ${source}\n🎯 Story: ${chosenStory}`);
         await sendPhoto(chatId, imageUrl, post);
-        await safeSendMessage(chatId, `🧠 **Visual Spec**\n\n${imageConcept}`);
+        await safeSendMessage(chatId, `🧠 Visual Spec\n\n${imageConceptToText(imageConcept)}`);
 
       } else if (text.startsWith("/start") || text.startsWith("/help")) {
         await safeSendMessage(chatId, "Commands:\n/generate\n/autopost [cat]\n/post <topic>\n/research <goal>");
@@ -928,6 +1275,14 @@ app.post("/webhook", async (req, res) => {
       isProcessing = false;
     }
   })();
+});
+
+app.get("/", (_req, res) => {
+  res.json({ ok: true, service: "shoro-bot", status: "running" });
+});
+
+app.get("/health", (_req, res) => {
+  res.json({ ok: true, processing: isProcessing });
 });
 
 const PORT = process.env.PORT || 3000;
