@@ -1,0 +1,22 @@
+{
+  "name": "shoro-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node server.js",
+    "tunnel": "ngrok http 3000",
+    "set-webhook": "node scripts/set-telegram-webhook.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "axios": "^1.15.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "snoowrap": "^1.23.0",
+    "ws": "^8.20.0"
+  }
+}
