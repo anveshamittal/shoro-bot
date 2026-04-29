@@ -380,17 +380,25 @@ function buildImageConceptPrompt(topic, post) {
     `POST CONTENT: ${post}`,
     "",
     "IMPORTANT:",
-    "The visual description must NOT include any text, words, typography, letters, logos, captions, labels, or signs.",
-    "Only describe background, scene, lighting, mood, composition, and texture.",
+    "The visual description must NOT include any text, words, typography, letters, logos, captions, labels, signs, UI, charts, or watermarks.",
+    "Make the scene feel current, scroll-stopping, and platform-native for 2026 social content.",
+    "The visual should clearly relate to the post content, using specific objects, environments, metaphors, or actions that match the topic.",
+    "Avoid generic corporate stock-photo scenes. Avoid vague prompts like 'a modern office' unless the post is actually about that.",
+    "Only describe background, scene, lighting, mood, composition, texture, and subject matter relevant to the post.",
     "",
     "Return ONLY valid JSON in exactly this shape:",
     '{"headline":"...","visual":"...","highlight":"...","subtext":"..."}',
     "",
     "Field requirements:",
-    "headline: 4-10 words, punchy, no hashtags",
-    "visual: detailed cinematic background prompt with no text elements",
+    "headline: 4-10 words, punchy, specific to the post, no hashtags",
+    "visual: detailed cinematic background prompt that feels like a premium trending LinkedIn thumbnail, with no text elements",
     "highlight: 1-4 words to emphasize from headline",
-    "subtext: short supporting line under headline (optional but preferred)",
+    "subtext: short supporting line under headline that reinforces the post angle and emotional hook",
+    "",
+    "Style guidance:",
+    "Prefer high-contrast editorial lighting, bold composition, modern startup energy, documentary realism, or premium abstract symbolism when appropriate.",
+    "Use concrete visual cues tied to the topic, such as broken systems, dashboards, founders, desks, phones, code, meetings, factories, clinics, charts, cash flow, or AI interfaces only when relevant.",
+    "The visual must communicate the same core idea as the post at a glance.",
     "",
     "No markdown. No code fences. JSON only."
   ].join("\n");
@@ -666,6 +674,18 @@ function buildOverlaySvg(width, height, imageConcept) {
 
   const fontStack = "Inter, DejaVu Sans, Liberation Sans, Arial, sans-serif";
 
+  const overlayPadX = Math.round(width * 0.03);
+  const overlayPadY = Math.round(height * 0.02);
+  const overlayWidth = Math.max(220, width - left * 2 - overlayPadX * 2);
+  const overlayBoxTop = Math.max(0, overlayTop - overlayPadY);
+  const overlayBoxHeight = Math.min(
+    height - overlayBoxTop - Math.round(height * 0.05),
+    Math.max(
+      Math.round(height * 0.24),
+      (headlineLines.length * lineHeight) + (subtextLines.length * subLineHeight) + Math.round(headlineSize * 1.6)
+    )
+  );
+
   const highlightTerms = getHighlightTerms(imageConcept.highlight, imageConcept.headline);
   const lineStates = headlineLines.map((line) => buildHighlightedLineTspans(line, highlightTerms));
   let hasHighlight = lineStates.some((state) => state.matched);
@@ -704,6 +724,8 @@ function buildOverlaySvg(width, height, imageConcept) {
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="${width}" height="${height}" fill="url(#fade)"/>
+  <rect x="${left - overlayPadX}" y="${overlayBoxTop}" width="${overlayWidth}" height="${overlayBoxHeight}" rx="28" ry="28" fill="rgba(3, 7, 18, 0.64)"/>
+  <rect x="${left - overlayPadX}" y="${overlayBoxTop}" width="${Math.round(Math.min(92, overlayWidth * 0.08))}" height="${overlayBoxHeight}" rx="28" ry="28" fill="#f59e0b" opacity="0.95"/>
   ${headlineShadowBlocks}
   ${headlineBlocks}
   ${subtextShadowBlocks}
