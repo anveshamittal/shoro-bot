@@ -45,14 +45,15 @@ const OPENCLAW_BIN = (() => {
 
 const TELEGRAM_MAX_TEXT = 3900;
 const TELEGRAM_MAX_CAPTION = 900;
-const OPENCLAW_MAX_RETRIES = 3;
+const OPENCLAW_MAX_RETRIES = 5;
 const RECENT_TOPICS_FILE = "recent_topics.json";
 const RECENT_TOPICS_LIMIT = 10;
-const OR_MODEL = process.env.OR_MODEL || "google/gemini-2.0-flash-lite-001";
+const OR_MODEL = process.env.OR_MODEL || "openai/gpt-4o-mini";
 const OR_API_KEY = process.env.OPENROUTER_API_KEY || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "dall-e-3";
 const OPENAI_IMAGE_SIZE = process.env.OPENAI_IMAGE_SIZE || "1024x1024";
+const FONT_PATH = path.join(os.tmpdir(), "overlay-font.ttf");
 const OPENCLAW_MAIN = (() => {
   if (process.env.OPENCLAW_MAIN) return process.env.OPENCLAW_MAIN;
   const candidates = [
@@ -106,6 +107,36 @@ function saveRecentTopics(topics) {
 }
 
 const recentTopics = loadRecentTopics();
+
+// ─── FONT MANAGEMENT ───────────────────────────────────────────────────────
+
+let _fontB64 = null;
+
+async function ensureFont() {
+  if (fs.existsSync(FONT_PATH)) return;
+  try {
+    console.log("📦 Downloading overlay font...");
+    const res = await axios.get(
+      "https://github.com/rsms/inter/raw/master/docs/font-files/Inter-Bold.ttf",
+      { responseType: "arraybuffer", timeout: 30000 }
+    );
+    fs.writeFileSync(FONT_PATH, Buffer.from(res.data));
+    console.log("✅ Overlay font ready.");
+  } catch (err) {
+    console.warn(`⚠️ Could not download font: ${err.message}. Falling back to system fonts.`);
+  }
+}
+
+function getFontB64() {
+  if (!_fontB64 && fs.existsSync(FONT_PATH)) {
+    try {
+      _fontB64 = fs.readFileSync(FONT_PATH).toString("base64");
+    } catch (err) {
+      console.warn(`⚠️ Could not read font file: ${err.message}`);
+    }
+  }
+  return _fontB64;
+}
 
 function rememberTopic(topic) {
   const key = normalizeTopic(topic);
@@ -672,7 +703,16 @@ function buildOverlaySvg(width, height, imageConcept) {
     subLineHeight,
   } = layout;
 
-  const fontStack = "Inter, DejaVu Sans, Liberation Sans, Arial, sans-serif";
+  const fontB64 = getFontB64();
+  const fontFaceBlock = fontB64 ? `
+    <style>
+      @font-face {
+        font-family: 'OverlayFont';
+        src: url('data:font/truetype;base64,${fontB64}') format('truetype');
+        font-weight: 800;
+      }
+    </style>` : "";
+  const fontStack = fontB64 ? "OverlayFont, sans-serif" : "DejaVu Sans, Arial, sans-serif";
 
   const overlayPadX = Math.round(width * 0.03);
   const overlayPadY = Math.round(height * 0.02);
@@ -717,6 +757,7 @@ function buildOverlaySvg(width, height, imageConcept) {
   return `
 <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
   <defs>
+    ${fontFaceBlock}
     <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="rgba(0,0,0,0.05)"/>
       <stop offset="55%" stop-color="rgba(0,0,0,0.58)"/>
@@ -1347,6 +1388,14 @@ app.post("/webhook", async (req, res) => {
 
 app.get("/", (_req, res) => {
   res.json({ ok: true, service: "shoro-bot", status: "running" });
+});
+
+ensureFont().then(() => {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+}).catch((err) => {
+  console.error("Fatal error during startup:", err);
+  process.exit(1);
 });
 
 app.get("/health", (_req, res) => {
