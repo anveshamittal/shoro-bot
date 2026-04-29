@@ -50,6 +50,9 @@ const RECENT_TOPICS_FILE = "recent_topics.json";
 const RECENT_TOPICS_LIMIT = 10;
 const OR_MODEL = process.env.OR_MODEL || "google/gemini-2.0-flash-lite-001";
 const OR_API_KEY = process.env.OPENROUTER_API_KEY || "";
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "dall-e-3";
+const OPENAI_IMAGE_SIZE = process.env.OPENAI_IMAGE_SIZE || "1024x1024";
 const OPENCLAW_MAIN = (() => {
   if (process.env.OPENCLAW_MAIN) return process.env.OPENCLAW_MAIN;
   const candidates = [
@@ -394,6 +397,42 @@ function buildImageConceptPrompt(topic, post) {
 }
 
 async function callImageAPI(prompt) {
+  if (OPENAI_API_KEY) {
+    try {
+      console.log(`🎨 Calling OpenAI image model (${OPENAI_IMAGE_MODEL})...`);
+      const response = await axios.post(
+        "https://api.openai.com/v1/images/generations",
+        {
+          model: OPENAI_IMAGE_MODEL,
+          prompt: `${prompt}, no text, no letters, no typography, no logo, no watermark`,
+          size: OPENAI_IMAGE_SIZE,
+          quality: "standard",
+          n: 1
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${OPENAI_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          timeout: 120000
+        }
+      );
+
+      const imageData = response.data?.data?.[0] || {};
+      if (imageData.url) return imageData.url;
+
+      if (imageData.b64_json) {
+        const outputPath = path.join(os.tmpdir(), `openai-image-${Date.now()}.png`);
+        fs.writeFileSync(outputPath, Buffer.from(imageData.b64_json, "base64"));
+        return outputPath;
+      }
+
+      throw new Error("OpenAI image response did not include a usable image");
+    } catch (err) {
+      console.warn(`⚠️ OpenAI image generation failed, falling back to Pollinations: ${err.message}`);
+    }
+  }
+
   console.log("🎨 Calling Pollinations.ai for image...");
   const safePrompt = `${prompt}, no text, no letters, no typography, no logo, no watermark`;
   const cleanedPrompt = encodeURIComponent(safePrompt.replace(/[\n\r]/g, " ").trim());
@@ -625,7 +664,7 @@ function buildOverlaySvg(width, height, imageConcept) {
     subLineHeight,
   } = layout;
 
-  const fontStack = "Montserrat, Poppins, Inter, Arial, Helvetica, sans-serif";
+  const fontStack = "Inter, DejaVu Sans, Liberation Sans, Arial, sans-serif";
 
   const highlightTerms = getHighlightTerms(imageConcept.highlight, imageConcept.headline);
   const lineStates = headlineLines.map((line) => buildHighlightedLineTspans(line, highlightTerms));
@@ -639,20 +678,25 @@ function buildOverlaySvg(width, height, imageConcept) {
     }
   }
 
+  const headlineShadowBlocks = headlineLines
+    .map((line, index) => `<text x="${left + 2}" y="${overlayTop + (index * lineHeight) + 2}" font-family="${fontStack}" font-size="${headlineSize}" font-weight="800" fill="rgba(0,0,0,0.88)">${escapeXml(line)}</text>`)
+    .join("");
+
   const headlineBlocks = headlineLines
-    .map((line, index) => `<text x="${left}" y="${overlayTop + (index * lineHeight)}" font-family="${fontStack}" font-size="${headlineSize}" font-weight="800" filter="url(#shadow)">${lineStates[index]?.svg || `<tspan fill="#f8fafc">${escapeXml(line)}</tspan>`}</text>`)
+    .map((line, index) => `<text x="${left}" y="${overlayTop + (index * lineHeight)}" font-family="${fontStack}" font-size="${headlineSize}" font-weight="800">${lineStates[index]?.svg || `<tspan fill="#f8fafc">${escapeXml(line)}</tspan>`}</text>`)
+    .join("");
+
+  const subtextShadowBlocks = subtextLines
+    .map((line, index) => `<text x="${left + 1}" y="${subtextStartY + (index * subLineHeight) + 2}" font-family="${fontStack}" font-size="${subtextSize}" font-weight="500" fill="rgba(0,0,0,0.84)">${escapeXml(line)}</text>`)
     .join("");
 
   const subtextBlocks = subtextLines
-    .map((line, index) => `<text x="${left}" y="${subtextStartY + (index * subLineHeight)}" font-family="${fontStack}" font-size="${subtextSize}" font-weight="500" fill="#e2e8f0" filter="url(#shadow)">${escapeXml(line)}</text>`)
+    .map((line, index) => `<text x="${left}" y="${subtextStartY + (index * subLineHeight)}" font-family="${fontStack}" font-size="${subtextSize}" font-weight="500" fill="#e2e8f0">${escapeXml(line)}</text>`)
     .join("");
 
   return `
 <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
-      <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="rgba(0,0,0,0.88)"/>
-    </filter>
     <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="rgba(0,0,0,0.05)"/>
       <stop offset="55%" stop-color="rgba(0,0,0,0.58)"/>
@@ -660,7 +704,9 @@ function buildOverlaySvg(width, height, imageConcept) {
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="${width}" height="${height}" fill="url(#fade)"/>
+  ${headlineShadowBlocks}
   ${headlineBlocks}
+  ${subtextShadowBlocks}
   ${subtextBlocks}
 </svg>`;
 }
