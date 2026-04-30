@@ -23,6 +23,10 @@ process.on("uncaughtException", (err) => {
 });
 
 // ─── 1. CONFIGURATION & CONSTANTS ───────────────────────────────────────────
+let isPipelineRunning = false;
+
+// Optimize sharp for production memory usage
+sharp.cache(false);
 
 const TOKEN = process.env.TELEGRAM_TOKEN;
 if (!TOKEN) {
@@ -53,7 +57,7 @@ const OR_API_KEY = process.env.OPENROUTER_API_KEY || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "dall-e-3";
 const OPENAI_IMAGE_SIZE = process.env.OPENAI_IMAGE_SIZE || "1024x1024";
-const FONT_PATH = path.join(os.tmpdir(), "overlay-font.ttf");
+const FONT_PATH = path.join(os.tmpdir(), "overlay-font-anton.ttf");
 const OPENCLAW_MAIN = (() => {
   if (process.env.OPENCLAW_MAIN) return process.env.OPENCLAW_MAIN;
   const candidates = [
@@ -72,11 +76,12 @@ const OPENCLAW_MAIN = (() => {
 // ─── 2. CATEGORIES & SUBREDDITS ─────────────────────────────────────────────
 
 const CATEGORY_SUBREDDITS = {
-  startup: ["startups", "entrepreneur", "SaaS", "business", "productivity"],
-  edtech: ["edtech", "highereducation", "Teachers", "education"],
-  ai: ["artificial", "MachineLearning", "singularity", "LocalLLaMA"],
-  healthcare: ["healthtech", "medicine", "nursing", "healthcare"],
-  fintech: ["fintech", "personalfinance", "crypto", "investing"]
+  startup: ["startups", "entrepreneur", "SaaS", "business", "productivity", "ycombinator", "indiehackers", "soloentrepreneur"],
+  edtech: ["edtech", "highereducation", "Teachers", "education", "learning", "onlinelearning", "instructionaldesign"],
+  ai: ["artificial", "MachineLearning", "singularity", "LocalLLaMA", "ChatGPT", "OpenAI", "ClaudeAI", "StableDiffusion"],
+  healthcare: ["healthtech", "medicine", "nursing", "healthcare", "digitalhealth", "biotech"],
+  fintech: ["fintech", "personalfinance", "crypto", "investing", "banking", "payments", "wallstreetbets", "stocks", "finance", "etfs"],
+  marketing: ["marketing", "socialmedia", "advertising", "copywriting", "growthhacking", "digitalmarketing", "contentmarketing"]
 };
 
 const DEFAULT_CATEGORY = "startup";
@@ -117,7 +122,7 @@ async function ensureFont() {
   try {
     console.log("📦 Downloading overlay font...");
     const res = await axios.get(
-      "https://github.com/rsms/inter/raw/master/docs/font-files/Inter-Bold.ttf",
+      "https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf",
       { responseType: "arraybuffer", timeout: 30000 }
     );
     fs.writeFileSync(FONT_PATH, Buffer.from(res.data));
@@ -515,7 +520,7 @@ function escapeXml(value) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+    .replace(/'/g, "&apos;");
 }
 
 function estimateTextWidth(text, fontSize, widthFactor = 0.56) {
@@ -529,14 +534,14 @@ function normalizeToken(value) {
 function getHighlightTerms(highlight, headline) {
   const stopWords = new Set([
     "the", "and", "for", "with", "that", "this", "from", "into", "your", "you",
-    "are", "was", "were", "have", "has", "had", "not", "but", "out", "too", "just"
+    "are", "was", "were", "have", "has", "had", "not", "but", "out", "too", "just", "as"
   ]);
 
-  const seed = `${String(highlight || "")} ${String(headline || "")}`;
+  const seed = String(highlight || "");
   const tokens = seed
     .split(/\s+/)
     .map((t) => normalizeToken(t))
-    .filter((t) => t.length >= 4 && !stopWords.has(t));
+    .filter((t) => t.length >= 3 && !stopWords.has(t));
 
   return Array.from(new Set(tokens)).slice(0, 6);
 }
@@ -552,226 +557,49 @@ function pickFallbackHighlightTerm(lines) {
   return words[0];
 }
 
-function wrapText(text, maxWidthPx, fontSize, maxLines, widthFactor = 0.56) {
-  const words = String(text || "").trim().split(/\s+/).filter(Boolean);
-  if (!words.length) return [];
-
-  const lines = [];
-  let current = "";
-  const maxCharsChunk = Math.max(3, Math.floor(maxWidthPx / Math.max(1, fontSize * widthFactor)));
-
-  for (const word of words) {
-    if (estimateTextWidth(word, fontSize, widthFactor) > maxWidthPx) {
-      const chunks = [];
-      let source = word;
-      while (source.length > maxCharsChunk) {
-        chunks.push(source.slice(0, maxCharsChunk));
-        source = source.slice(maxCharsChunk);
-      }
-      if (source) chunks.push(source);
-
-      for (const chunk of chunks) {
-        const nextChunk = current ? `${current} ${chunk}` : chunk;
-        if (estimateTextWidth(nextChunk, fontSize, widthFactor) <= maxWidthPx) {
-          current = nextChunk;
-          continue;
-        }
-        if (current) {
-          lines.push(current);
-          if (lines.length >= maxLines) {
-            lines[maxLines - 1] = `${lines[maxLines - 1].replace(/\.\.\.$/, "")}...`;
-            return lines;
-          }
-        }
-        current = chunk;
-      }
-      continue;
-    }
-
-    const next = current ? `${current} ${word}` : word;
-    if (estimateTextWidth(next, fontSize, widthFactor) <= maxWidthPx) {
-      current = next;
-      continue;
-    }
-
-    if (current) {
-      lines.push(current);
-      if (lines.length >= maxLines) {
-        lines[maxLines - 1] = `${lines[maxLines - 1].replace(/\.\.\.$/, "")}...`;
-        return lines;
-      }
-    }
-    current = word;
-  }
-
-  if (current && lines.length < maxLines) {
-    lines.push(current);
-  } else if (current && lines.length >= maxLines) {
-    lines[maxLines - 1] = `${lines[maxLines - 1].replace(/\.\.\.$/, "")}...`;
-  }
-
-  return lines;
-}
-
-function fitOverlayLayout(width, height, imageConcept) {
-  const left = Math.round(width * 0.08);
-  const right = Math.round(width * 0.08);
-  const maxWidth = Math.max(220, width - left - right);
-
-  let headlineSize = Math.max(40, Math.round(width * 0.066));
-  const minHeadlineSize = Math.max(28, Math.round(width * 0.034));
-
-  while (headlineSize >= minHeadlineSize) {
-    const subtextSize = Math.max(20, Math.round(headlineSize * 0.46));
-
-    const headlineLines = wrapText(imageConcept.headline, maxWidth, headlineSize, 3, 0.62);
-    const subtextLines = wrapText(imageConcept.subtext, maxWidth, subtextSize, 2, 0.54);
-    const lineHeight = Math.round(headlineSize * 1.08);
-    const overlayTop = Math.round(height * 0.62);
-    const subLineHeight = Math.round(subtextSize * 1.24);
-    const subtextStartY = overlayTop + (headlineLines.length * lineHeight) + Math.round(headlineSize * 0.65);
-    const bottom = subtextStartY + Math.max(0, (subtextLines.length - 1) * subLineHeight);
-    const maxBottom = height - Math.round(height * 0.08);
-
-    const headFits = headlineLines.every((line) => estimateTextWidth(line, headlineSize, 0.62) <= maxWidth);
-    const subFits = subtextLines.every((line) => estimateTextWidth(line, subtextSize, 0.54) <= maxWidth);
-    const heightFits = bottom <= maxBottom;
-
-    if (headFits && subFits && heightFits) {
-      return {
-        left,
-        headlineSize,
-        subtextSize,
-        headlineLines,
-        subtextLines,
-        lineHeight,
-        overlayTop,
-        subtextStartY,
-        subLineHeight,
-      };
-    }
-
-    headlineSize -= 3;
-  }
-
-  const fallbackHeadlineSize = minHeadlineSize;
-  return {
-    left,
-    headlineSize: fallbackHeadlineSize,
-    subtextSize: Math.max(18, Math.round(fallbackHeadlineSize * 0.45)),
-    headlineLines: wrapText(imageConcept.headline, maxWidth, fallbackHeadlineSize, 3, 0.62),
-    subtextLines: wrapText(imageConcept.subtext, maxWidth, Math.max(18, Math.round(fallbackHeadlineSize * 0.45)), 2, 0.54),
-    lineHeight: Math.round(fallbackHeadlineSize * 1.08),
-    overlayTop: Math.round(height * 0.62),
-    subtextStartY: Math.round(height * 0.62) + Math.round(fallbackHeadlineSize * 3.2),
-    subLineHeight: Math.round(Math.max(18, Math.round(fallbackHeadlineSize * 0.45)) * 1.24),
-  };
-}
-
-function buildHighlightedLineTspans(line, highlightTerms, forcedTerm = "") {
-  const parts = String(line || "").match(/[A-Za-z0-9']+|[^A-Za-z0-9']+/g) || [];
-  const termSet = new Set((highlightTerms || []).map((t) => normalizeToken(t)).filter(Boolean));
-  const force = normalizeToken(forcedTerm);
-
-  let matched = false;
-  const svg = parts
-    .map((part) => {
-      const token = normalizeToken(part);
-      if (!token) return `<tspan fill="#f8fafc">${escapeXml(part)}</tspan>`;
-
-      const shouldHighlight = termSet.has(token) || (force && token === force);
-      if (shouldHighlight) matched = true;
-      const color = shouldHighlight ? "#fbbf24" : "#f8fafc";
-      return `<tspan fill="${color}">${escapeXml(part)}</tspan>`;
-    })
-    .join("");
-
-  return { svg, matched };
-}
-
-function buildOverlaySvg(width, height, imageConcept) {
-  const layout = fitOverlayLayout(width, height, imageConcept);
-  const {
-    left,
-    headlineSize,
-    subtextSize,
-    headlineLines,
-    subtextLines,
-    lineHeight,
-    overlayTop,
-    subtextStartY,
-    subLineHeight,
-  } = layout;
-
-  const fontB64 = getFontB64();
-  const fontFaceBlock = fontB64 ? `
-    <style>
-      @font-face {
-        font-family: 'OverlayFont';
-        src: url('data:font/truetype;base64,${fontB64}') format('truetype');
-        font-weight: 800;
-      }
-    </style>` : "";
-  const fontStack = fontB64 ? "OverlayFont, sans-serif" : "DejaVu Sans, Arial, sans-serif";
-
-  const overlayPadX = Math.round(width * 0.03);
-  const overlayPadY = Math.round(height * 0.02);
-  const overlayWidth = Math.max(220, width - left * 2 - overlayPadX * 2);
-  const overlayBoxTop = Math.max(0, overlayTop - overlayPadY);
-  const overlayBoxHeight = Math.min(
-    height - overlayBoxTop - Math.round(height * 0.05),
-    Math.max(
-      Math.round(height * 0.24),
-      (headlineLines.length * lineHeight) + (subtextLines.length * subLineHeight) + Math.round(headlineSize * 1.6)
-    )
-  );
-
+function generatePangoMarkup(imageConcept, headlineSize, subtextSize, isShadow = false) {
+  const headline = String(imageConcept.headline || "").toUpperCase();
+  const subtext = String(imageConcept.subtext || "").toUpperCase();
   const highlightTerms = getHighlightTerms(imageConcept.highlight, imageConcept.headline);
-  const lineStates = headlineLines.map((line) => buildHighlightedLineTspans(line, highlightTerms));
-  let hasHighlight = lineStates.some((state) => state.matched);
+  const termSet = new Set((highlightTerms || []).map(normalizeToken).filter(Boolean));
 
-  if (!hasHighlight && headlineLines.length > 0) {
-    const forced = pickFallbackHighlightTerm(headlineLines);
-    if (forced) {
-      lineStates[0] = buildHighlightedLineTspans(headlineLines[0], highlightTerms, forced);
-      hasHighlight = lineStates[0].matched;
+  function applyMarkup(text, fontSize, forceT = "") {
+    const parts = text.split(/(\s+)/);
+    let html = "";
+    for (const part of parts) {
+      if (/^\s+$/.test(part)) {
+        html += escapeXml(part);
+        continue;
+      }
+      const token = normalizeToken(part);
+      if (!token) {
+        html += escapeXml(part);
+        continue;
+      }
+
+      const shouldHighlight = termSet.has(token) || (forceT && token === forceT) || 
+          highlightTerms.some(ht => token.includes(normalizeToken(ht)) && normalizeToken(ht).length > 3);
+      
+      let color = shouldHighlight ? "#fbbf24" : "white";
+      if (isShadow) color = "black";
+      
+      html += `<span foreground="${color}">${escapeXml(part)}</span>`;
     }
+    return `<span font="Anton ${fontSize}" letter_spacing="-1024">${html}</span>`;
   }
 
-  const headlineShadowBlocks = headlineLines
-    .map((line, index) => `<text x="${left + 2}" y="${overlayTop + (index * lineHeight) + 2}" font-family="${fontStack}" font-size="${headlineSize}" font-weight="800" fill="rgba(0,0,0,0.88)">${escapeXml(line)}</text>`)
-    .join("");
+  // Check headline for highlights, fallback if none
+  let forcedHeadline = "";
+  const headlineHasMatch = headline.split(/\s+/).some(w => termSet.has(normalizeToken(w)));
+  if (!headlineHasMatch) forcedHeadline = pickFallbackHighlightTerm(headline);
 
-  const headlineBlocks = headlineLines
-    .map((line, index) => `<text x="${left}" y="${overlayTop + (index * lineHeight)}" font-family="${fontStack}" font-size="${headlineSize}" font-weight="800">${lineStates[index]?.svg || `<tspan fill="#f8fafc">${escapeXml(line)}</tspan>`}</text>`)
-    .join("");
-
-  const subtextShadowBlocks = subtextLines
-    .map((line, index) => `<text x="${left + 1}" y="${subtextStartY + (index * subLineHeight) + 2}" font-family="${fontStack}" font-size="${subtextSize}" font-weight="500" fill="rgba(0,0,0,0.84)">${escapeXml(line)}</text>`)
-    .join("");
-
-  const subtextBlocks = subtextLines
-    .map((line, index) => `<text x="${left}" y="${subtextStartY + (index * subLineHeight)}" font-family="${fontStack}" font-size="${subtextSize}" font-weight="500" fill="#e2e8f0">${escapeXml(line)}</text>`)
-    .join("");
-
-  return `
-<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    ${fontFaceBlock}
-    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="rgba(0,0,0,0.05)"/>
-      <stop offset="55%" stop-color="rgba(0,0,0,0.58)"/>
-      <stop offset="100%" stop-color="rgba(0,0,0,0.92)"/>
-    </linearGradient>
-  </defs>
-  <rect x="0" y="0" width="${width}" height="${height}" fill="url(#fade)"/>
-  <rect x="${left - overlayPadX}" y="${overlayBoxTop}" width="${overlayWidth}" height="${overlayBoxHeight}" rx="28" ry="28" fill="rgba(3, 7, 18, 0.64)"/>
-  <rect x="${left - overlayPadX}" y="${overlayBoxTop}" width="${Math.round(Math.min(92, overlayWidth * 0.08))}" height="${overlayBoxHeight}" rx="28" ry="28" fill="#f59e0b" opacity="0.95"/>
-  ${headlineShadowBlocks}
-  ${headlineBlocks}
-  ${subtextShadowBlocks}
-  ${subtextBlocks}
-</svg>`;
+  const headlineMarkup = applyMarkup(headline, headlineSize, forcedHeadline);
+  
+  if (subtext) {
+    const subtextMarkup = applyMarkup(subtext, subtextSize);
+    return `${headlineMarkup}\n${subtextMarkup}`;
+  }
+  return headlineMarkup;
 }
 
 async function renderImageWithText(backgroundImageUrl, imageConcept) {
@@ -785,11 +613,64 @@ async function renderImageWithText(backgroundImageUrl, imageConcept) {
   const width = metadata.width || 1024;
   const height = metadata.height || 1024;
 
-  const overlaySvg = buildOverlaySvg(width, height, imageConcept);
+  const headlineSize = Math.max(48, Math.round(width * 0.085));
+  const subtextSize = Math.round(headlineSize * 0.60);
+  const textWidth = Math.round(width * 0.92);
+
+  const shadowHtml = generatePangoMarkup(imageConcept, headlineSize, subtextSize, true);
+  const textHtml = generatePangoMarkup(imageConcept, headlineSize, subtextSize, false);
+
+  const shadowBuffer = await sharp({
+    text: {
+      text: shadowHtml,
+      width: textWidth,
+      align: 'center',
+      rgba: true,
+      fontfile: FONT_PATH
+    }
+  }).png().toBuffer();
+
+  const textBuffer = await sharp({
+    text: {
+      text: textHtml,
+      width: textWidth,
+      align: 'center',
+      rgba: true,
+      fontfile: FONT_PATH
+    }
+  }).png().toBuffer();
+
+  const shadowMeta = await sharp(shadowBuffer).metadata();
+  const textMeta = await sharp(textBuffer).metadata();
+
+  const paddingBottom = Math.round(height * 0.08);
+  const shadowTop = height - (shadowMeta.height || 0) - paddingBottom;
+  const textTop = height - (textMeta.height || 0) - paddingBottom;
+
+  const gradientSvg = `
+<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="rgba(0,0,0,0)"/>
+      <stop offset="40%" stop-color="rgba(0,0,0,0.1)"/>
+      <stop offset="100%" stop-color="rgba(0,0,0,0.85)"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="${width}" height="${height}" fill="url(#fade)"/>
+</svg>`;
+
+  const shadowOffset = Math.max(2, Math.round(headlineSize * 0.05));
+  const shadowLeft = Math.round((width - (shadowMeta.width || textWidth)) / 2) + shadowOffset;
+  const textLeft = Math.round((width - (textMeta.width || textWidth)) / 2);
+
   const outputPath = path.join(os.tmpdir(), `shoro-render-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`);
 
   await sharp(background)
-    .composite([{ input: Buffer.from(overlaySvg), top: 0, left: 0 }])
+    .composite([
+      { input: Buffer.from(gradientSvg), top: 0, left: 0 },
+      { input: shadowBuffer, top: shadowTop + shadowOffset, left: shadowLeft },
+      { input: textBuffer, top: textTop, left: textLeft }
+    ])
     .jpeg({ quality: 92, mozjpeg: true })
     .toFile(outputPath);
 
@@ -813,8 +694,8 @@ const REDDIT_HEADERS_BASE = {
   "Cache-Control": "no-cache",
 };
 
-async function fetchRedditSubOnce(sub, baseHost) {
-  const url = `https://${baseHost}/r/${sub}/hot.json?limit=8&raw_json=1`;
+async function fetchRedditSubOnce(sub, baseHost, type = "hot") {
+  const url = `https://${baseHost}/r/${sub}/${type}.json?limit=10&raw_json=1`;
   const res = await axios.get(url, {
     headers: { ...REDDIT_HEADERS_BASE, "User-Agent": randomAgent() },
     timeout: 12000,
@@ -824,8 +705,8 @@ async function fetchRedditSubOnce(sub, baseHost) {
   return res.data.data.children
     .map((p) => p?.data?.title)
     .filter((t) => t && t.length > 20 && t.length < 200)
-    .slice(0, 5)
-    .map((t) => `[r/${sub}] ${t}`);
+    .slice(0, 8)
+    .map((t) => `[r/${sub} ${type}] ${t}`);
 }
 
 async function fetchRedditTrends(category) {
@@ -834,28 +715,32 @@ async function fetchRedditTrends(category) {
 
   for (const sub of subs) {
     try {
-      let batch = [];
-      try {
-        batch = await fetchRedditSubOnce(sub, "www.reddit.com");
-      } catch (e) {
-        console.warn(`Reddit www r/${sub}: ${e.message}`);
-      }
-      if (batch.length === 0) {
+      // Try both HOT and NEW for each sub
+      for (const type of ["hot", "new"]) {
+        let batch = [];
         try {
-          batch = await fetchRedditSubOnce(sub, "old.reddit.com");
+          batch = await fetchRedditSubOnce(sub, "www.reddit.com", type);
         } catch (e) {
-          console.warn(`Reddit old r/${sub}: ${e.message}`);
+          try {
+            batch = await fetchRedditSubOnce(sub, "api.reddit.com", type);
+          } catch (e2) {
+            try {
+              batch = await fetchRedditSubOnce(sub, "old.reddit.com", type);
+            } catch (e3) {
+              console.warn(`Reddit r/${sub} ${type} failed all hosts.`);
+            }
+          }
         }
+        allTitles.push(...batch);
       }
-      allTitles.push(...batch);
     } catch (err) {
-      console.warn(`Reddit r/${sub} failed: ${err.message}`);
+      console.warn(`Reddit r/${sub} processing failed: ${err.message}`);
     }
-    await sleep(450);
+    await sleep(350);
   }
   if (allTitles.length < 3) return null;
   console.log(`✅ Reddit: fetched ${allTitles.length} titles across ${subs.length} subs (${category || DEFAULT_CATEGORY})`);
-  return allTitles.slice(0, 20).join("\n");
+  return allTitles.slice(0, 35).join("\n");
 }
 
 async function fetchHNTrends() {
@@ -1150,7 +1035,13 @@ function assertPost(post, contextMsg) {
 // ─── 8. PIPELINES ───────────────────────────────────────────────────────────
 
 async function runAutopostPipeline(category = null) {
-  console.log(`🔍 Fetching live signals for autopost (Category: ${category || DEFAULT_CATEGORY})...`);
+  if (isPipelineRunning) {
+    console.log("⚠️ Pipeline already running. Skipping concurrent trigger.");
+    return;
+  }
+  isPipelineRunning = true;
+  try {
+    console.log(`🔍 Fetching live signals for autopost (Category: ${category || DEFAULT_CATEGORY})...`);
   const { data: rawSignals, source } = await fetchLiveSignals(category);
 
   if (!rawSignals) {
@@ -1192,7 +1083,10 @@ async function runAutopostPipeline(category = null) {
   rememberTopic(chosenStory.trim());
   logStage("FINAL_POST", post);
   logStage("IMAGE_CONCEPT", imageConcept);
-  return { post, source, chosenStory: chosenStory.trim(), imageUrl, imageConcept };
+    return { post, source, chosenStory: chosenStory.trim(), imageUrl, imageConcept };
+  } finally {
+    isPipelineRunning = false;
+  }
 }
 
 async function runGeneratePipeline() {
@@ -1390,19 +1284,14 @@ app.get("/", (_req, res) => {
   res.json({ ok: true, service: "shoro-bot", status: "running" });
 });
 
+app.get("/health", (_req, res) => {
+  res.json({ ok: true, processing: isProcessing });
+});
+
 ensureFont().then(() => {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 }).catch((err) => {
   console.error("Fatal error during startup:", err);
   process.exit(1);
-});
-
-app.get("/health", (_req, res) => {
-  res.json({ ok: true, processing: isProcessing });
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
 });
