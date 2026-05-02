@@ -389,7 +389,51 @@ function buildPainPointExtractorPrompt(chosenStory) {
   ].join("\n");
 }
 
-// AGENT 6: POST POLISHER (Final pass for rhythm and flow)
+// AGENT 6 (new): ARGUMENT ARCHITECT (Converts pain-point insight into a JSON content blueprint)
+function buildArgumentArchitectSystemPrompt() {
+  return [
+    "You are a narrative architect. You receive a raw insight about a founder topic and convert it into a structured content blueprint. Do not write any LinkedIn post. Only output a JSON object and nothing else — no preamble, no markdown backticks.",
+    "",
+    "Output format:",
+    "{",
+    '  "hook_type": "curiosity | contrarian | blunt",',
+    '  "core_claim": "...",',
+    '  "supporting_point": "...",',
+    '  "specific_detail": "...",',
+    '  "emotional_trigger": "...",',
+    '  "ending_style": "open_loop | punchline | reflection"',
+    "}"
+  ].join("\n");
+}
+
+// AGENT 7 (new): DRAFT CRITIC (Diagnoses weaknesses in Draft 1 — does NOT rewrite)
+function buildDraftCriticSystemPrompt() {
+  return [
+    "You are a brutally honest LinkedIn content critic. Your job is to diagnose weaknesses in a draft post written for founders. Do not rewrite the post. Only output a JSON object and nothing else — no preamble, no markdown backticks.",
+    "",
+    "Output format:",
+    "{",
+    '  "hook_strength": <1-10>,',
+    '  "clarity_issues": ["..."],',
+    '  "generic_phrases": ["..."],',
+    '  "emotional_flatness": "...",',
+    '  "specificity_score": <1-10>,',
+    '  "rewrite_instructions": [',
+    '    "...",',
+    '    "..."',
+    '  ]',
+    "}",
+    "",
+    "Flag any of these automatically:",
+    "- Phrases like \"here's what I learned\", \"this is your sign\", \"let that sink in\"",
+    "- Em dashes used more than once",
+    "- Rhetorical questions used more than once",
+    "- Any line that gives generic advice without a specific detail",
+    "- Hook that does not create a curiosity gap or make a bold claim"
+  ].join("\n");
+}
+
+// AGENT 8: POST POLISHER (Final pass for rhythm and flow)
 function buildPostPolisherPrompt(post) {
   return [
     "You are a world-class editor. You polish LinkedIn posts to perfection.",
@@ -868,6 +912,38 @@ async function callOpenRouterDirect(prompt) {
   return text.trim();
 }
 
+/**
+ * callOpenRouterWithModel — sends a system+user message pair to a specific model.
+ * Used by Argument Architect (gpt-4o) and Draft Critic (claude-3.5-sonnet).
+ */
+async function callOpenRouterWithModel(model, systemPrompt, userMessage) {
+  if (!OR_API_KEY) throw new Error("OPENROUTER_API_KEY not set.");
+  const res = await axios.post(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userMessage },
+      ],
+      max_tokens: 1024,
+      temperature: 0.7,
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${OR_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://shoro-bot.local",
+        "X-Title": "Shoro Bot",
+      },
+      timeout: 180000,
+    }
+  );
+  const text = res.data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error(`OpenRouter (${model}) returned empty content`);
+  return text.trim();
+}
+
 // const OPENCLAW_MAIN = "C:\\Users\\BIT\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
 
 async function callDirectWithRetry(prompt, logName) {
@@ -1065,9 +1141,75 @@ async function runAutopostPipeline(category = null) {
   const painPrompt = buildPainPointExtractorPrompt(chosenStory.trim());
   const painPoint = await callDirectWithRetry(painPrompt, "pain-extractor");
 
-  const writerPrompt = buildPostWriterPrompt(`${chosenStory.trim()}\nContext/Pain Point: ${painPoint}`);
-  let rawPost = await callDirectWithRetry(writerPrompt, "post-writer");
+  logStage("PAIN_POINT", painPoint);
+
+  // ── Argument Architect ────────────────────────────────────────────────────
+  console.log("🏗️  [argument-architect] Building content blueprint...");
+  let blueprint;
+  try {
+    const architectRaw = await callOpenRouterWithModel(
+      "openai/gpt-4o",
+      buildArgumentArchitectSystemPrompt(),
+      painPoint
+    );
+    blueprint = extractFirstJsonObject(architectRaw);
+    if (!blueprint) throw new Error("No valid JSON object found in Argument Architect response");
+    logStage("ARGUMENT_BLUEPRINT", blueprint);
+  } catch (err) {
+    console.warn(`⚠️ [argument-architect] JSON parse failed, falling back to raw text: ${err.message}`);
+    blueprint = painPoint; // raw-text fallback
+  }
+
+  // ── Post Writer — Draft 1 ─────────────────────────────────────────────────
+  const blueprintInput = typeof blueprint === "string"
+    ? `${chosenStory.trim()}\nContext/Pain Point: ${painPoint}\nBlueprint: ${blueprint}`
+    : `${chosenStory.trim()}\nContext/Pain Point: ${painPoint}\nBlueprint: ${JSON.stringify(blueprint, null, 2)}`;
+
+  const writerPrompt = buildPostWriterPrompt(blueprintInput);
+  let draft1 = await callDirectWithRetry(writerPrompt, "post-writer-draft1");
+  draft1 = enforcePostFormat(draft1);
+  logStage("DRAFT_1", draft1);
+
+  // ── Draft Critic ──────────────────────────────────────────────────────────
+  console.log("🔍 [draft-critic] Analysing Draft 1...");
+  let critiqueJson;
+  try {
+    const critiqueRaw = await callOpenRouterWithModel(
+      "anthropic/claude-3.5-sonnet",
+      buildDraftCriticSystemPrompt(),
+      draft1
+    );
+    critiqueJson = extractFirstJsonObject(critiqueRaw);
+    if (!critiqueJson) throw new Error("No valid JSON object found in Draft Critic response");
+    logStage("DRAFT_CRITIQUE", critiqueJson);
+  } catch (err) {
+    console.warn(`⚠️ [draft-critic] JSON parse failed, falling back to raw text: ${err.message}`);
+    critiqueJson = null;
+  }
+
+  // ── Post Writer — Draft 2 ─────────────────────────────────────────────────
+  const postWriterSystemPrompt = buildPostWriterPrompt("").split("\n").slice(0, 3).join("\n"); // system context hint
+  const draft2UserPrompt = [
+    "You are rewriting a LinkedIn post based on a critique.",
+    "",
+    "Here is the original draft:",
+    draft1,
+    "",
+    "Here is the critique:",
+    critiqueJson ? JSON.stringify(critiqueJson, null, 2) : "(No structured critique available — improve the hook, remove generic phrases, and tighten the ending.)",
+    "",
+    "Rewrite the post by fixing every issue listed in rewrite_instructions. Rules:",
+    "- Keep the same core idea and insight",
+    "- Do not change the fundamental angle",
+    "- Fix the hook first",
+    "- Replace every flagged generic phrase with a specific detail",
+    "- Do not add any new generic advice",
+    "- Output only the rewritten post, no explanation"
+  ].join("\n");
+
+  let rawPost = await callDirectWithRetry(draft2UserPrompt, "post-writer-draft2");
   rawPost = enforcePostFormat(rawPost);
+  logStage("DRAFT_2", rawPost);
 
   const polisherPrompt = buildPostPolisherPrompt(rawPost);
   const post = await callDirectWithRetry(polisherPrompt, "post-polisher");
@@ -1099,9 +1241,74 @@ async function runTopicPostPipeline(topic) {
   const painPrompt = buildPainPointExtractorPrompt(topic);
   const painPoint = await callDirectWithRetry(painPrompt, "pain-extractor-manual");
 
-  const prompt = buildTopicPostPrompt(`${topic}\nContext/Pain Point: ${painPoint}`);
-  let rawPost = await callDirectWithRetry(prompt, "topic-post");
+  logStage("PAIN_POINT", painPoint);
+
+  // ── Argument Architect ────────────────────────────────────────────────────
+  console.log("🏗️  [argument-architect] Building content blueprint...");
+  let blueprint;
+  try {
+    const architectRaw = await callOpenRouterWithModel(
+      "openai/gpt-4o",
+      buildArgumentArchitectSystemPrompt(),
+      painPoint
+    );
+    blueprint = extractFirstJsonObject(architectRaw);
+    if (!blueprint) throw new Error("No valid JSON object found in Argument Architect response");
+    logStage("ARGUMENT_BLUEPRINT", blueprint);
+  } catch (err) {
+    console.warn(`⚠️ [argument-architect] JSON parse failed, falling back to raw text: ${err.message}`);
+    blueprint = painPoint;
+  }
+
+  // ── Post Writer — Draft 1 ─────────────────────────────────────────────────
+  const blueprintInput = typeof blueprint === "string"
+    ? `${topic}\nContext/Pain Point: ${painPoint}\nBlueprint: ${blueprint}`
+    : `${topic}\nContext/Pain Point: ${painPoint}\nBlueprint: ${JSON.stringify(blueprint, null, 2)}`;
+
+  const draft1Prompt = buildTopicPostPrompt(blueprintInput);
+  let draft1 = await callDirectWithRetry(draft1Prompt, "topic-post-draft1");
+  draft1 = enforcePostFormat(draft1);
+  logStage("DRAFT_1", draft1);
+
+  // ── Draft Critic ──────────────────────────────────────────────────────────
+  console.log("🔍 [draft-critic] Analysing Draft 1...");
+  let critiqueJson;
+  try {
+    const critiqueRaw = await callOpenRouterWithModel(
+      "anthropic/claude-3.5-sonnet",
+      buildDraftCriticSystemPrompt(),
+      draft1
+    );
+    critiqueJson = extractFirstJsonObject(critiqueRaw);
+    if (!critiqueJson) throw new Error("No valid JSON object found in Draft Critic response");
+    logStage("DRAFT_CRITIQUE", critiqueJson);
+  } catch (err) {
+    console.warn(`⚠️ [draft-critic] JSON parse failed, falling back to raw text: ${err.message}`);
+    critiqueJson = null;
+  }
+
+  // ── Post Writer — Draft 2 ─────────────────────────────────────────────────
+  const draft2UserPrompt = [
+    "You are rewriting a LinkedIn post based on a critique.",
+    "",
+    "Here is the original draft:",
+    draft1,
+    "",
+    "Here is the critique:",
+    critiqueJson ? JSON.stringify(critiqueJson, null, 2) : "(No structured critique available — improve the hook, remove generic phrases, and tighten the ending.)",
+    "",
+    "Rewrite the post by fixing every issue listed in rewrite_instructions. Rules:",
+    "- Keep the same core idea and insight",
+    "- Do not change the fundamental angle",
+    "- Fix the hook first",
+    "- Replace every flagged generic phrase with a specific detail",
+    "- Do not add any new generic advice",
+    "- Output only the rewritten post, no explanation"
+  ].join("\n");
+
+  let rawPost = await callDirectWithRetry(draft2UserPrompt, "topic-post-draft2");
   rawPost = enforcePostFormat(rawPost);
+  logStage("DRAFT_2", rawPost);
 
   const polisherPrompt = buildPostPolisherPrompt(rawPost);
   const post = await callDirectWithRetry(polisherPrompt, "topic-polisher");
