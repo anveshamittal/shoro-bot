@@ -601,35 +601,71 @@ function pickFallbackHighlightTerm(lines) {
   return words[0];
 }
 
+function getHighlightMode() {
+  const modes = [
+    "single_word",
+    "multi_word",
+    "full_line_first",
+    "full_line_second",
+    "random_scattered"
+  ];
+  return modes[Math.floor(Math.random() * modes.length)];
+}
+
 function generatePangoMarkup(imageConcept, headlineSize, subtextSize, isShadow = false) {
+  const mode = getHighlightMode();
   const headline = String(imageConcept.headline || "").toUpperCase();
   const subtext = String(imageConcept.subtext || "").toUpperCase();
   const highlightTerms = getHighlightTerms(imageConcept.highlight, imageConcept.headline);
   const termSet = new Set((highlightTerms || []).map(normalizeToken).filter(Boolean));
 
-  function applyMarkup(text, fontSize, forceT = "") {
-    const parts = text.split(/(\s+)/);
-    let html = "";
-    for (const part of parts) {
-      if (/^\s+$/.test(part)) {
-        html += escapeXml(part);
-        continue;
-      }
-      const token = normalizeToken(part);
-      if (!token) {
-        html += escapeXml(part);
-        continue;
-      }
+  let globalLineCount = 0;
 
-      const shouldHighlight = termSet.has(token) || (forceT && token === forceT) || 
-          highlightTerms.some(ht => token.includes(normalizeToken(ht)) && normalizeToken(ht).length > 3);
+  function applyMarkup(text, fontSize, forceT = "") {
+    const lines = text.split("\n");
+    let finalLines = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      const currentLineIndex = globalLineCount++;
       
-      let color = shouldHighlight ? "#fbbf24" : "white";
-      if (isShadow) color = "black";
-      
-      html += `<span foreground="${color}">${escapeXml(part)}</span>`;
+      if (mode === "full_line_first" && currentLineIndex === 0) {
+        finalLines.push(`<span foreground="${isShadow ? "black" : "#fbbf24"}">${escapeXml(lines[i])}</span>`);
+      } else if (mode === "full_line_second" && currentLineIndex === 1) {
+        finalLines.push(`<span foreground="${isShadow ? "black" : "#fbbf24"}">${escapeXml(lines[i])}</span>`);
+      } else {
+        const parts = lines[i].split(/(\s+)/);
+        let html = "";
+        for (const part of parts) {
+          if (/^\s+$/.test(part)) {
+            html += escapeXml(part);
+            continue;
+          }
+          const token = normalizeToken(part);
+          if (!token) {
+            html += escapeXml(part);
+            continue;
+          }
+
+          let shouldHighlight = false;
+
+          if (mode === "single_word") {
+            shouldHighlight = termSet.has(token) || (forceT && token === forceT) || 
+                highlightTerms.some(ht => token.includes(normalizeToken(ht)) && normalizeToken(ht).length > 3);
+          } else if (mode === "multi_word") {
+            shouldHighlight = termSet.has(token) || Math.random() < 0.15 || (forceT && token === forceT);
+          } else if (mode === "random_scattered") {
+            shouldHighlight = Math.random() < 0.2;
+          }
+
+          let color = shouldHighlight ? "#fbbf24" : "white";
+          if (isShadow) color = "black";
+          
+          html += `<span foreground="${color}">${escapeXml(part)}</span>`;
+        }
+        finalLines.push(html);
+      }
     }
-    return `<span font="Anton ${fontSize}" letter_spacing="-1024">${html}</span>`;
+    return `<span font="Anton ${fontSize}" letter_spacing="-1024">${finalLines.join("\n")}</span>`;
   }
 
   // Check headline for highlights, fallback if none
