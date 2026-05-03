@@ -1388,42 +1388,49 @@ async function safeSendMessage(chatId, text) {
   }
 }
 
+async function sendChunked(chatId, text) {
+  const content = text || "";
+  for (let i = 0; i < content.length; i += TELEGRAM_MAX_TEXT) {
+    await safeSendMessage(chatId, content.slice(i, i + TELEGRAM_MAX_TEXT));
+  }
+}
+
 async function sendPhoto(chatId, photoUrl, caption) {
   try {
+    const textStr = String(caption || "");
+    const captionToUse = textStr.length <= TELEGRAM_MAX_CAPTION ? textStr : "";
+
     const isRemoteUrl = /^https?:\/\//i.test(String(photoUrl || ""));
     if (isRemoteUrl) {
       await axios.post(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, {
         chat_id: chatId,
         photo: photoUrl,
-        caption: clampText(caption)?.slice(0, TELEGRAM_MAX_CAPTION)
+        caption: captionToUse
       });
-      return;
+    } else {
+      const form = new FormData();
+      form.append("chat_id", String(chatId));
+      form.append("caption", captionToUse);
+      form.append("photo", fs.createReadStream(photoUrl));
+
+      await axios.post(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, form, {
+        headers: form.getHeaders(),
+        maxBodyLength: Infinity,
+        timeout: 30000,
+      });
+
+      try {
+        fs.unlink(photoUrl, () => {});
+      } catch (_) { }
     }
 
-    const form = new FormData();
-    form.append("chat_id", String(chatId));
-    form.append("caption", clampText(caption)?.slice(0, TELEGRAM_MAX_CAPTION) || "");
-    form.append("photo", fs.createReadStream(photoUrl));
-
-    await axios.post(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, form, {
-      headers: form.getHeaders(),
-      maxBodyLength: Infinity,
-      timeout: 30000,
-    });
-
-    try {
-      fs.unlink(photoUrl, () => {});
-    } catch (_) { }
+    // If the text is too long for a caption, send it as a separate full message
+    if (textStr.length > TELEGRAM_MAX_CAPTION) {
+      await sendChunked(chatId, textStr);
+    }
   } catch (err) {
     console.error(`Telegram sendPhoto failed: ${err.message}`);
-    await safeSendMessage(chatId, `🖼️ Image: ${photoUrl}\n\n${caption}`);
-  }
-}
-
-async function sendChunked(chatId, text) {
-  const content = text || "";
-  for (let i = 0; i < content.length; i += TELEGRAM_MAX_TEXT) {
-    await safeSendMessage(chatId, content.slice(i, i + TELEGRAM_MAX_TEXT));
+    await sendChunked(chatId, `🖼️ Image: ${photoUrl}\n\n${caption}`);
   }
 }
 
