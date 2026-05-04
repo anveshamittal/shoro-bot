@@ -453,32 +453,48 @@ function buildPostPolisherPrompt(post) {
 
 // AGENT 7: IMAGE CONCEPT STRATEGIST (Designs viral visuals for posts)
 function buildImageConceptPrompt(topic, post) {
+  const styles = [
+    "CYBERPUNK / TECH-NOIR (Dark, neon, futuristic)",
+    "MINIMALIST / ARCHITECTURAL (Clean lines, vast spaces, powerful geometry)",
+    "SURREALIST / DREAM-LIKE (Impossible physics, floating objects, moody sky)",
+    "VINTAGE EDITORIAL (1970s magazine style, grainy, warm, bold colors)",
+    "GRITTY / INDUSTRIAL (Metal, steam, raw textures, dark shadows)",
+    "EPIC CINEMATIC (Film-like scale, volumetric lighting, hyper-realistic)",
+    "ELECTRIC / NEON VIBRANCE (Glow, high saturation, energy)",
+    "NORDIC / CLEAN (Soft light, cold tones, high-end professional)",
+    "VINTAGE SCI-FI (Retro-futurism, glowing computers, space-age)",
+    "MODERNIST ABSTRACT (Shapes, depth, light-vs-dark, mystery)"
+  ];
+  const style = styles[Math.floor(Math.random() * styles.length)];
+
   return [
-    "You are a viral image strategist. Design a high-impact visual concept for this LinkedIn post.",
+    "You are a Viral Poster Agent. Design a UNIQUE, high-impact LinkedIn infographic poster concept.",
+    "",
+    `MANDATORY ART STYLE: ${style}`,
     "",
     `TOPIC: ${topic}`,
     `POST CONTENT: ${post}`,
     "",
+    "IMPORTANT VISUAL RULES (Dramatic Poster Background):",
+    "- scene: Highly detailed, epic cinematic storytelling that visually represents the post topic.",
+    "- metaphor: Invent a UNIQUE, dramatic visual metaphor based on the topic (e.g., climbing a crumbling ladder, a tiny ship in a massive storm, a glowing futuristic portal). DO NOT always use crossroads.",
+    "- detail: Make the environment rich and complex (e.g., if it's about AI, show robotic elements; if it's about risk, show stormy/dark elements vs bright/future elements).",
+    "- composition: Strong central subject, epic scale, clear negative space at the top and bottom for text overlay.",
+    "- lighting: Dramatic cinematic lighting, glowing accents, volumetric fog, high contrast.",
     "IMPORTANT:",
-    "The visual description must NOT include any text, words, typography, letters, logos, captions, labels, signs, UI, charts, or watermarks.",
-    "Make the scene feel current, scroll-stopping, and platform-native for 2026 social content.",
-    "The visual should clearly relate to the post content, using specific objects, environments, metaphors, or actions that match the topic.",
-    "Avoid generic corporate stock-photo scenes. Avoid vague prompts like 'a modern office' unless the post is actually about that.",
-    "Only describe background, scene, lighting, mood, composition, texture, and subject matter relevant to the post.",
+    "- NO TEXT, no typography, no letters, no words, no UI panels, no floating labels.",
+    "- The image must be a text-free, highly detailed background artwork.",
+    "- no over-designed poster elements",
+    "",
+    "IMPORTANT TEXT OVERLAY RULES (Golden Rule: Image = Emotion, Text = Message):",
+    "Generate structured text blocks for the poster layout:",
+    "- hook: Big Hook for the top (e.g. 'KPMG JUST SAID IT OUT LOUD')",
+    "- number: Core Claim for the middle (e.g. '2-3 YEARS')",
+    "- contrast: Subtext or contrast to support the number (e.g. 'OF JOB LEFT')",
+    "- cta: Call to action for the bottom (e.g. 'CHOOSE YOUR CAREER WISELY')",
     "",
     "Return ONLY valid JSON in exactly this shape:",
-    '{"headline":"...","visual":"...","highlight":"...","subtext":"..."}',
-    "",
-    "Field requirements:",
-    "headline: 4-10 words, punchy, specific to the post, no hashtags",
-    "visual: detailed cinematic background prompt that feels like a premium trending LinkedIn thumbnail, with no text elements",
-    "highlight: 1-4 words to emphasize from headline",
-    "subtext: short supporting line under headline that reinforces the post angle and emotional hook",
-    "",
-    "Style guidance:",
-    "Prefer high-contrast editorial lighting, bold composition, modern startup energy, documentary realism, or premium abstract symbolism when appropriate.",
-    "Use concrete visual cues tied to the topic, such as broken systems, dashboards, founders, desks, phones, code, meetings, factories, clinics, charts, cash flow, or AI interfaces only when relevant.",
-    "The visual must communicate the same core idea as the post at a glance.",
+    '{"hook":"...","number":"...","contrast":"...","cta":"...","visual":"..."}',
     "",
     "No markdown. No code fences. JSON only."
   ].join("\n");
@@ -548,14 +564,14 @@ function extractFirstJsonObject(text) {
 
 function normalizeImageConcept(rawConcept, topic) {
   const parsed = extractFirstJsonObject(rawConcept) || {};
-  const fallbackHeadline = String(topic || "Founder reality check").slice(0, 90).trim() || "Founder reality check";
-
-  const headline = String(parsed.headline || fallbackHeadline).replace(/\s+/g, " ").trim().slice(0, 100);
+  
+  const hook = String(parsed.hook || "FOUNDER REALITY CHECK").replace(/\s+/g, " ").trim().slice(0, 100).toUpperCase();
+  const number = String(parsed.number || "").replace(/\s+/g, " ").trim().slice(0, 40).toUpperCase();
+  const contrast = String(parsed.contrast || "").replace(/\s+/g, " ").trim().slice(0, 80).toUpperCase();
+  const cta = String(parsed.cta || "CHOOSE WISELY").replace(/\s+/g, " ").trim().slice(0, 60).toUpperCase();
   const visual = String(parsed.visual || `cinematic editorial portrait background, moody lighting, shallow depth of field, startup office atmosphere, no text elements`).replace(/\s+/g, " ").trim();
-  const highlight = String(parsed.highlight || headline.split(" ").slice(0, 2).join(" ")).replace(/\s+/g, " ").trim().slice(0, 40);
-  const subtext = String(parsed.subtext || "").replace(/\s+/g, " ").trim().slice(0, 120);
 
-  return { headline, visual, highlight, subtext };
+  return { hook, number, contrast, cta, visual };
 }
 
 function escapeXml(value) {
@@ -576,110 +592,23 @@ function normalizeToken(value) {
 }
 
 function getHighlightTerms(highlight, headline) {
-  const stopWords = new Set([
-    "the", "and", "for", "with", "that", "this", "from", "into", "your", "you",
-    "are", "was", "were", "have", "has", "had", "not", "but", "out", "too", "just", "as"
-  ]);
-
-  const seed = String(highlight || "");
-  const tokens = seed
-    .split(/\s+/)
-    .map((t) => normalizeToken(t))
-    .filter((t) => t.length >= 3 && !stopWords.has(t));
-
-  return Array.from(new Set(tokens)).slice(0, 6);
+  // Deprecated, removed for layout engine
+  return [];
 }
 
 function pickFallbackHighlightTerm(lines) {
-  const words = (Array.isArray(lines) ? lines.join(" ") : String(lines || ""))
-    .split(/\s+/)
-    .map((w) => normalizeToken(w))
-    .filter((w) => w.length >= 5);
-
-  if (!words.length) return "";
-  words.sort((a, b) => b.length - a.length);
-  return words[0];
+  // Deprecated, removed for layout engine
+  return "";
 }
 
 function getHighlightMode() {
-  const modes = [
-    "single_word",
-    "multi_word",
-    "full_line_first",
-    "full_line_second",
-    "random_scattered"
-  ];
-  return modes[Math.floor(Math.random() * modes.length)];
+  // Deprecated, removed for layout engine
+  return "single_word";
 }
 
 function generatePangoMarkup(imageConcept, headlineSize, subtextSize, isShadow = false) {
-  const mode = getHighlightMode();
-  const headline = String(imageConcept.headline || "").toUpperCase();
-  const subtext = String(imageConcept.subtext || "").toUpperCase();
-  const highlightTerms = getHighlightTerms(imageConcept.highlight, imageConcept.headline);
-  const termSet = new Set((highlightTerms || []).map(normalizeToken).filter(Boolean));
-
-  let globalLineCount = 0;
-
-  function applyMarkup(text, fontSize, forceT = "") {
-    const lines = text.split("\n");
-    let finalLines = [];
-    
-    for (let i = 0; i < lines.length; i++) {
-      const currentLineIndex = globalLineCount++;
-      
-      if (mode === "full_line_first" && currentLineIndex === 0) {
-        finalLines.push(`<span foreground="${isShadow ? "black" : "#fbbf24"}">${escapeXml(lines[i])}</span>`);
-      } else if (mode === "full_line_second" && currentLineIndex === 1) {
-        finalLines.push(`<span foreground="${isShadow ? "black" : "#fbbf24"}">${escapeXml(lines[i])}</span>`);
-      } else {
-        const parts = lines[i].split(/(\s+)/);
-        let html = "";
-        for (const part of parts) {
-          if (/^\s+$/.test(part)) {
-            html += escapeXml(part);
-            continue;
-          }
-          const token = normalizeToken(part);
-          if (!token) {
-            html += escapeXml(part);
-            continue;
-          }
-
-          let shouldHighlight = false;
-
-          if (mode === "single_word") {
-            shouldHighlight = termSet.has(token) || (forceT && token === forceT) || 
-                highlightTerms.some(ht => token.includes(normalizeToken(ht)) && normalizeToken(ht).length > 3);
-          } else if (mode === "multi_word") {
-            shouldHighlight = termSet.has(token) || Math.random() < 0.15 || (forceT && token === forceT);
-          } else if (mode === "random_scattered") {
-            shouldHighlight = Math.random() < 0.2;
-          }
-
-          let color = shouldHighlight ? "#fbbf24" : "white";
-          if (isShadow) color = "black";
-          
-          html += `<span foreground="${color}">${escapeXml(part)}</span>`;
-        }
-        finalLines.push(html);
-      }
-    }
-    return `<span font="Anton ${fontSize}" letter_spacing="-1024">${finalLines.join("\n")}</span>`;
-  }
-
-  // Check headline for highlights, fallback if none
-  let forcedHeadline = "";
-  const headlineHasMatch = headline.split(/\s+/).some(w => termSet.has(normalizeToken(w)));
-  if (!headlineHasMatch) forcedHeadline = pickFallbackHighlightTerm(headline);
-
-  const headlineMarkup = applyMarkup(headline, headlineSize, forcedHeadline);
-  
-  if (subtext) {
-    const subtextMarkup = applyMarkup(subtext, subtextSize);
-    return `${headlineMarkup}\n${subtextMarkup}`;
-  }
-  return headlineMarkup;
+  // Deprecated, removed for layout engine
+  return "";
 }
 
 async function renderImageWithText(backgroundImageUrl, imageConcept) {
@@ -693,64 +622,152 @@ async function renderImageWithText(backgroundImageUrl, imageConcept) {
   const width = metadata.width || 1024;
   const height = metadata.height || 1024;
 
-  const headlineSize = Math.max(48, Math.round(width * 0.085));
-  const subtextSize = Math.round(headlineSize * 0.60);
   const textWidth = Math.round(width * 0.92);
+  const shadowOffset = Math.max(2, Math.round(width * 0.005));
 
-  const shadowHtml = generatePangoMarkup(imageConcept, headlineSize, subtextSize, true);
-  const textHtml = generatePangoMarkup(imageConcept, headlineSize, subtextSize, false);
+  async function createTextBuffer(text, fontSize, color, isShadow) {
+    if (!text) return null;
+    const escaped = escapeXml(text);
+    const textColor = isShadow ? "black" : color;
+    const markup = `<span font="Anton ${fontSize}" letter_spacing="-1024" foreground="${textColor}">${escaped}</span>`;
+    return sharp({
+      text: {
+        text: markup,
+        width: textWidth,
+        align: 'center',
+        rgba: true,
+        fontfile: FONT_PATH
+      }
+    }).png().toBuffer();
+  }
 
-  const shadowBuffer = await sharp({
-    text: {
-      text: shadowHtml,
-      width: textWidth,
-      align: 'center',
-      rgba: true,
-      fontfile: FONT_PATH
-    }
-  }).png().toBuffer();
+  // 1. RANDOM SIZE SCALE
+  const headlineScale = [0.055, 0.06, 0.065];
+  const scale = headlineScale[Math.floor(Math.random() * headlineScale.length)];
 
-  const textBuffer = await sharp({
-    text: {
-      text: textHtml,
-      width: textWidth,
-      align: 'center',
-      rgba: true,
-      fontfile: FONT_PATH
-    }
-  }).png().toBuffer();
+  const hookSize = Math.round(width * (scale * 1.2)); 
+  const numberSize = Math.round(width * (scale * 2.2));
+  const contrastSize = Math.round(width * (scale * 0.9));
+  const ctaSize = Math.round(width * (scale * 0.75));
 
-  const shadowMeta = await sharp(shadowBuffer).metadata();
-  const textMeta = await sharp(textBuffer).metadata();
+  // 2. RANDOM COLOR PALETTE
+  const palettes = [
+    ["#fbbf24", "#ffffff"], // gold + white
+    ["#3b82f6", "#ffffff"], // electric blue + white
+    ["#10b981", "#ffffff"], // emerald green + white
+    ["#ec4899", "#ffffff"], // neon pink + white
+    ["#8b5cf6", "#ffffff"], // cyber purple + white
+    ["#ef4444", "#ffffff"], // bold red + white
+    ["#06b6d4", "#ffffff"], // cyan + white
+    ["#f97316", "#ffffff"], // intense orange + white
+  ];
+  const [highlightColor, textColor] = palettes[Math.floor(Math.random() * palettes.length)];
 
-  const paddingBottom = Math.round(height * 0.08);
-  const shadowTop = height - (shadowMeta.height || 0) - paddingBottom;
-  const textTop = height - (textMeta.height || 0) - paddingBottom;
+  const hookBuf = await createTextBuffer(imageConcept.hook, hookSize, textColor, false);
+  const hookShadow = await createTextBuffer(imageConcept.hook, hookSize, textColor, true);
+  
+  const numberBuf = await createTextBuffer(imageConcept.number, numberSize, highlightColor, false);
+  const numberShadow = await createTextBuffer(imageConcept.number, numberSize, highlightColor, true);
 
-  const gradientSvg = `
+  const contrastBuf = await createTextBuffer(imageConcept.contrast, contrastSize, textColor, false);
+  const contrastShadow = await createTextBuffer(imageConcept.contrast, contrastSize, textColor, true);
+
+  const ctaBuf = await createTextBuffer(imageConcept.cta, ctaSize, highlightColor, false);
+  const ctaShadow = await createTextBuffer(imageConcept.cta, ctaSize, highlightColor, true);
+
+  const hookMeta = hookBuf ? await sharp(hookBuf).metadata() : { height: 0, width: 0 };
+  const numberMeta = numberBuf ? await sharp(numberBuf).metadata() : { height: 0, width: 0 };
+  const contrastMeta = contrastBuf ? await sharp(contrastBuf).metadata() : { height: 0, width: 0 };
+  const ctaMeta = ctaBuf ? await sharp(ctaBuf).metadata() : { height: 0, width: 0 };
+
+  const gap = Math.round(height * 0.015);
+  
+  // Calculate total block height
+  let totalHeight = 0;
+  if (hookBuf) totalHeight += hookMeta.height + gap;
+  if (numberBuf) totalHeight += numberMeta.height + gap;
+  if (contrastBuf) totalHeight += contrastMeta.height + gap;
+  if (ctaBuf) totalHeight += ctaMeta.height + gap;
+  if (totalHeight > 0) totalHeight -= gap; // remove last gap
+
+  // 3. RANDOM POSITION LOGIC (top, center, bottom)
+  const positions = ["bottom", "center", "top"];
+  const position = positions[Math.floor(Math.random() * positions.length)];
+  
+  const paddingY = Math.round(height * 0.08);
+
+  let startY;
+  if (position === "bottom") {
+    startY = height - totalHeight - paddingY;
+  } else if (position === "center") {
+    startY = Math.round((height - totalHeight) / 2);
+  } else {
+    startY = paddingY;
+  }
+
+  const composites = [];
+  
+  let gradientSvg = "";
+  if (position === "bottom") {
+    gradientSvg = `
 <svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="rgba(0,0,0,0)"/>
-      <stop offset="40%" stop-color="rgba(0,0,0,0.1)"/>
+      <stop offset="30%" stop-color="rgba(0,0,0,0)"/>
       <stop offset="100%" stop-color="rgba(0,0,0,0.85)"/>
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="${width}" height="${height}" fill="url(#fade)"/>
 </svg>`;
+  } else if (position === "top") {
+    gradientSvg = `
+<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="rgba(0,0,0,0.85)"/>
+      <stop offset="70%" stop-color="rgba(0,0,0,0)"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="${width}" height="${height}" fill="url(#fade)"/>
+</svg>`;
+  } else {
+    gradientSvg = `
+<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0" y="0" width="${width}" height="${height}" fill="rgba(0,0,0,0.4)"/>
+</svg>`;
+  }
 
-  const shadowOffset = Math.max(2, Math.round(headlineSize * 0.05));
-  const shadowLeft = Math.round((width - (shadowMeta.width || textWidth)) / 2) + shadowOffset;
-  const textLeft = Math.round((width - (textMeta.width || textWidth)) / 2);
+  composites.push({ input: Buffer.from(gradientSvg), top: 0, left: 0 });
+
+  let currentY = startY;
+  const elements = [];
+  
+  if (hookBuf) {
+    elements.push({ buf: hookBuf, shadow: hookShadow, y: currentY, meta: hookMeta });
+    currentY += hookMeta.height + gap;
+  }
+  if (numberBuf) {
+    elements.push({ buf: numberBuf, shadow: numberShadow, y: currentY, meta: numberMeta });
+    currentY += numberMeta.height + gap;
+  }
+  if (contrastBuf) {
+    elements.push({ buf: contrastBuf, shadow: contrastShadow, y: currentY, meta: contrastMeta });
+    currentY += contrastMeta.height + gap;
+  }
+  if (ctaBuf) {
+    elements.push({ buf: ctaBuf, shadow: ctaShadow, y: currentY, meta: ctaMeta });
+  }
+
+  for (const el of elements) {
+    const left = Math.round((width - (el.meta.width || textWidth)) / 2);
+    composites.push({ input: el.shadow, top: el.y + shadowOffset, left: left + shadowOffset });
+    composites.push({ input: el.buf, top: el.y, left: left });
+  }
 
   const outputPath = path.join(os.tmpdir(), `shoro-render-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`);
 
   await sharp(background)
-    .composite([
-      { input: Buffer.from(gradientSvg), top: 0, left: 0 },
-      { input: shadowBuffer, top: shadowTop + shadowOffset, left: shadowLeft },
-      { input: textBuffer, top: textTop, left: textLeft }
-    ])
+    .composite(composites)
     .jpeg({ quality: 92, mozjpeg: true })
     .toFile(outputPath);
 
@@ -759,9 +776,10 @@ async function renderImageWithText(backgroundImageUrl, imageConcept) {
 
 function imageConceptToText(imageConcept) {
   return [
-    `Headline: ${imageConcept.headline}`,
-    `Highlight: ${imageConcept.highlight || "-"}`,
-    `Subtext: ${imageConcept.subtext || "-"}`,
+    `Hook: ${imageConcept.hook}`,
+    `Number: ${imageConcept.number || "-"}`,
+    `Contrast: ${imageConcept.contrast || "-"}`,
+    `CTA: ${imageConcept.cta || "-"}`,
     `Visual: ${imageConcept.visual}`,
   ].join("\n");
 }
@@ -931,7 +949,7 @@ async function callOpenRouterDirect(prompt) {
       model: OR_MODEL,
       messages: [{ role: "user", content: prompt }],
       max_tokens: 1024,
-      temperature: 0.7,
+      temperature: 0.85,
     },
     {
       headers: {
