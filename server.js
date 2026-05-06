@@ -81,7 +81,13 @@ const CATEGORY_SUBREDDITS = {
   ai: ["artificial", "MachineLearning", "singularity", "LocalLLaMA", "ChatGPT", "OpenAI", "ClaudeAI", "StableDiffusion"],
   healthcare: ["healthtech", "medicine", "nursing", "healthcare", "digitalhealth", "biotech"],
   fintech: ["fintech", "personalfinance", "crypto", "investing", "banking", "payments", "wallstreetbets", "stocks", "finance", "etfs"],
-  marketing: ["marketing", "socialmedia", "advertising", "copywriting", "growthhacking", "digitalmarketing", "contentmarketing"]
+  marketing: ["marketing", "socialmedia", "advertising", "copywriting", "growthhacking", "digitalmarketing", "contentmarketing"],
+  news_general: ["worldnews", "news", "upliftingnews", "nottheonion"],
+  current_affairs: ["geopolitics", "worldpolitics", "economics", "unitedkingdom", "europe"],
+  dmv_edtech: ["jee", "UPSC", "Indian_Academia", "udemy", "edtech", "learnprogramming"],
+  controversy: ["unpopularopinion", "changemyview", "TrueOffMyChest", "AmItheAsshole"],
+  personal_growth: ["getdisciplined", "selfimprovement", "decidingtobebetter", "productivity"],
+  humor: ["India", "IndianPeopleFacebook", "desimemes", "Damnthatsinteresting"]
 };
 
 const DEFAULT_CATEGORY = "startup";
@@ -968,7 +974,7 @@ async function callOpenRouterDirect(prompt) {
 
 /**
  * callOpenRouterWithModel — sends a system+user message pair to a specific model.
- * Used by Argument Architect (gpt-4o) and Draft Critic (claude-3.5-sonnet).
+ * Used by Argument Architect (gpt-4o) and Draft Critic (claude-3.7-sonnet).
  */
 async function callOpenRouterWithModel(model, systemPrompt, userMessage) {
   if (!OR_API_KEY) throw new Error("OPENROUTER_API_KEY not set.");
@@ -1229,7 +1235,7 @@ async function runAutopostPipeline(category = null) {
   let critiqueJson;
   try {
     const critiqueRaw = await callOpenRouterWithModel(
-      "anthropic/claude-3.5-sonnet",
+      "anthropic/claude-3.7-sonnet",
       buildDraftCriticSystemPrompt(),
       draft1
     );
@@ -1329,7 +1335,7 @@ async function runTopicPostPipeline(topic) {
   let critiqueJson;
   try {
     const critiqueRaw = await callOpenRouterWithModel(
-      "anthropic/claude-3.5-sonnet",
+      "anthropic/claude-3.7-sonnet",
       buildDraftCriticSystemPrompt(),
       draft1
     );
@@ -1528,6 +1534,35 @@ app.post("/webhook", async (req, res) => {
         await safeSendMessage(chatId, `🧠 Visual Spec\n\n${imageConceptToText(result.imageConcept)}`);
         await safeSendMessage(chatId, `🔗 Sources:\n${result.sources}`);
 
+      } else if (text.startsWith("/hooks ") || text === "/hooks") {
+        // Usage: /hooks [region] [category]
+        // Example: /hooks India startup
+        const args = text.replace("/hooks", "").trim().split(" ");
+        const region = args[0] || "India";
+        const category = args[1] || DEFAULT_CATEGORY;
+        await safeSendMessage(chatId, `⏳ Running 8-agent hook pipeline for ${region} / ${category}...`);
+        const { hooks, source, topics } = await runHookPipeline({ region, category });
+        await safeSendMessage(chatId, `📡 Source: ${source}\n🎯 Topics: ${topics.join(", ")}\n📊 ${hooks.length} hooks generated`);
+        // Send a sample of hooks (first 5) as a preview
+        const preview = hooks.slice(0, 5).map(h =>
+          `[${h.category} / ${h.hook_type}]\n${h.text}`
+        ).join("\n\n---\n\n");
+        await sendChunked(chatId, preview);
+
+      } else if (text.startsWith("/hooktopic ")) {
+        // Usage: /hooktopic <topic> | <region>
+        // Example: /hooktopic Zepto raises $300M | India
+        const parts = text.replace("/hooktopic", "").trim().split("|");
+        const topic = parts[0]?.trim();
+        const region = parts[1]?.trim() || "India";
+        if (!topic) return safeSendMessage(chatId, "Usage: /hooktopic <topic> | <region>");
+        await safeSendMessage(chatId, `⏳ Running 8 hook agents for: "${topic}" (${region})...`);
+        const hooks = await runHookAgentsForTopic(topic, region, "general");
+        const preview = hooks.slice(0, 6).map(h =>
+          `[${h.category} / ${h.hook_type}]\n${h.text}`
+        ).join("\n\n---\n\n");
+        await sendChunked(chatId, preview);
+
       } else if (text.toLowerCase() === "autopost" || text.startsWith("/autopost")) {
         const args = text.split(" ").slice(1);
         const category = args[0] ? args[0].toLowerCase() : DEFAULT_CATEGORY;
@@ -1538,7 +1573,7 @@ app.post("/webhook", async (req, res) => {
         await safeSendMessage(chatId, `🧠 Visual Spec\n\n${imageConceptToText(imageConcept)}`);
 
       } else if (text.startsWith("/start") || text.startsWith("/help")) {
-        await safeSendMessage(chatId, "Commands:\n/generate\n/autopost [cat]\n/post <topic>\n/research <goal>");
+        await safeSendMessage(chatId, "Commands:\n/generate\n/autopost [cat]\n/post <topic>\n/research <goal>\n/hooks [region] [category] — Run 8-agent hook pipeline\n/hooktopic <topic> | <region> — Run hooks for a specific topic");
       }
     } catch (err) {
       await safeSendMessage(chatId, `❌ Error: ${err.message}`);
@@ -1546,6 +1581,277 @@ app.post("/webhook", async (req, res) => {
       isProcessing = false;
     }
   })();
+});
+
+// ─── 10. HOOK PIPELINE ──────────────────────────────────────────────────────
+
+// Step 2 — Region Prefix Helper
+function getRegionPrefix(region) {
+  const map = {
+    US: "This startup/event is from the US. ",
+    Canada: "This startup/event is from Canada. ",
+    Global: "This story spans multiple countries globally. ",
+    India: ""
+  };
+  return map[region] || "";
+}
+
+// Step 3 — 8 Agent Prompt Builders
+
+// Agent 1 — News General
+function buildNewsGeneralHooksPrompt(topic, region) {
+  return [
+    `You are a social media content writer for a general audience.`,
+    `Topic: ${topic}`,
+    `Region: ${region}`,
+    ``,
+    `Write 3 short emotional hooks (2–3 lines each, LinkedIn style, personal-sounding) about this topic.`,
+    `Hook 1: about FAILURE — emotion_type: sadness`,
+    `Hook 2: about a SMALL WIN — emotion_type: hope`,
+    `Hook 3: about a LESSON — emotion_type: inspiration`,
+    ``,
+    `Output ONLY a JSON array of exactly 3 objects. No markdown. No preamble. No explanation.`,
+    `Schema for each object:`,
+    `{ "hook_type": "<failure|small_win|lesson>", "platform": "LinkedIn", "text": "...", "emotion_type": "<sadness|hope|inspiration>", "hook_style": "standard" }`,
+  ].join("\n");
+}
+
+// Agent 2 — Current Affairs
+function buildCurrentAffairsHooksPrompt(topic, region) {
+  return [
+    `You are a serious content writer for educated, globally aware readers.`,
+    `Topic: ${topic}`,
+    `Region: ${region}`,
+    ``,
+    `Write 3 nuanced, serious hooks (LinkedIn style) about this topic:`,
+    `Hook 1: about SYSTEMIC RISK — emotion_type: fear`,
+    `Hook 2: about INSTITUTIONAL FAILURE — emotion_type: anger`,
+    `Hook 3: about PERSONAL IMPACT OR LEARNING — emotion_type: curiosity`,
+    ``,
+    `Output ONLY a JSON array of exactly 3 objects. No markdown. No preamble. No explanation.`,
+    `Schema for each object:`,
+    `{ "hook_type": "<systemic_risk|institutional_failure|personal_impact>", "platform": "LinkedIn", "text": "...", "emotion_type": "<fear|anger|curiosity>", "hook_style": "standard" }`,
+  ].join("\n");
+}
+
+// Agent 3 — DMV / EdTech
+function buildDmvEdtechHooksPrompt(topic, region) {
+  return [
+    `You are a content writer for students, exam aspirants, parents, and edtech users.`,
+    `Topic: ${topic}`,
+    `Region: ${region}`,
+    ``,
+    `Write 3 emotional story-style hooks (LinkedIn style) about this topic:`,
+    `Hook 1: about FAILURE — emotion_type: sadness`,
+    `Hook 2: about FINAL PASS / SUCCESS — emotion_type: pride`,
+    `Hook 3: about a LESSON LEARNED — emotion_type: inspiration`,
+    ``,
+    `Output ONLY a JSON array of exactly 3 objects. No markdown. No preamble. No explanation.`,
+    `Schema for each object:`,
+    `{ "hook_type": "<failure|final_pass|lesson>", "platform": "LinkedIn", "text": "...", "emotion_type": "<sadness|pride|inspiration>", "hook_style": "standard" }`,
+  ].join("\n");
+}
+
+// Agent 4 — Startup News
+function buildStartupNewsHooksPrompt(topic, region) {
+  return [
+    `You are a content writer for founders, operators, and investors.`,
+    `Topic: ${topic}`,
+    `Region: ${region}`,
+    ``,
+    `Write 3 LinkedIn hooks about this startup/business topic:`,
+    `Hook 1: OPTIMISTIC / HYPE angle — hook_type: "optimistic", emotion_type: hope`,
+    `Hook 2: SKEPTICAL / WARNING angle — hook_type: "skeptical", emotion_type: fear`,
+    `Hook 3: LESSON FOR FOUNDERS — hook_type: "lesson", emotion_type: inspiration`,
+    ``,
+    `Output ONLY a JSON array of exactly 3 objects. No markdown. No preamble. No explanation.`,
+    `Schema for each object:`,
+    `{ "hook_type": "<optimistic|skeptical|lesson>", "platform": "LinkedIn", "text": "...", "emotion_type": "<hope|fear|inspiration>", "hook_style": "standard" }`,
+  ].join("\n");
+}
+
+// Agent 5 — Controversy
+function buildControversyHooksPrompt(topic, region) {
+  return [
+    `You are a hot-take content writer for debate-lovers and strong-opinion holders on X (Twitter).`,
+    `Topic: ${topic}`,
+    `Region: ${region}`,
+    ``,
+    `Write 3 X (Twitter) hooks showing an emotional arc: anger → regret → realization.`,
+    `Hook 1: ANGER take — emotion_type: anger`,
+    `Hook 2: REGRET / SADNESS take — emotion_type: sadness`,
+    `Hook 3: REALIZATION / NUANCE — emotion_type: curiosity`,
+    ``,
+    `Output ONLY a JSON array of exactly 3 objects. No markdown. No preamble. No explanation.`,
+    `Schema for each object:`,
+    `{ "hook_type": "<anger|regret|realization>", "platform": "X", "text": "...", "emotion_type": "<anger|sadness|curiosity>", "hook_style": "standard" }`,
+  ].join("\n");
+}
+
+// Agent 6 — Personal Growth
+function buildPersonalGrowthHooksPrompt(topic, region) {
+  return [
+    `You are a reflective content writer for professionals, ambitious people, and founders on LinkedIn.`,
+    `Topic: ${topic}`,
+    `Region: ${region}`,
+    ``,
+    `Write 3 reflective, emotional LinkedIn hooks following the arc: past pain → insight → advice.`,
+    `Hook 1: PAST PAIN — emotion_type: sadness`,
+    `Hook 2: INSIGHT / TURNING POINT — emotion_type: hope`,
+    `Hook 3: ADVICE / LESSON — emotion_type: inspiration`,
+    ``,
+    `Output ONLY a JSON array of exactly 3 objects. No markdown. No preamble. No explanation.`,
+    `Schema for each object:`,
+    `{ "hook_type": "<past_pain|insight|advice>", "platform": "LinkedIn", "text": "...", "emotion_type": "<sadness|hope|inspiration>", "hook_style": "standard" }`,
+  ].join("\n");
+}
+
+// Agent 7 — Humor / Spicy
+function buildHumorSpicyHooksPrompt(topic, region) {
+  return [
+    `You are a meme-aware, edgy content writer for X (Twitter) users who love viral and weird angles.`,
+    `Topic: ${topic}`,
+    `Region: ${region}`,
+    ``,
+    `Write 3 funny, meme-style, edgy X hooks about this topic. All 3 must use hook_style: "meme_spicy".`,
+    `All emotion_type must be: humor.`,
+    ``,
+    `Output ONLY a JSON array of exactly 3 objects. No markdown. No preamble. No explanation.`,
+    `Schema for each object:`,
+    `{ "hook_type": "meme_spicy", "platform": "X", "text": "...", "emotion_type": "humor", "hook_style": "meme_spicy" }`,
+  ].join("\n");
+}
+
+// Agent 8 — LinkedIn Safe
+function buildLinkedinSafeHooksPrompt(topic, region) {
+  return [
+    `You are a polished content writer for senior professionals and corporate LinkedIn audiences.`,
+    `Topic: ${topic}`,
+    `Region: ${region}`,
+    ``,
+    `Write 3 calm, emotionally intelligent, professional LinkedIn hooks about this topic.`,
+    `No slang, no extreme opinions, no clickbait. Tone: thoughtful, credible, confident.`,
+    `Hook 1: emotion_type: pride`,
+    `Hook 2: emotion_type: inspiration`,
+    `Hook 3: emotion_type: curiosity`,
+    ``,
+    `Output ONLY a JSON array of exactly 3 objects. No markdown. No preamble. No explanation.`,
+    `Schema for each object:`,
+    `{ "hook_type": "<pride_moment|inspiration|curiosity>", "platform": "LinkedIn", "text": "...", "emotion_type": "<pride|inspiration|curiosity>", "hook_style": "standard" }`,
+  ].join("\n");
+}
+
+// Step 4 — Central Hook Runner
+async function runHookAgentsForTopic(topic, region, category) {
+  const prefix = getRegionPrefix(region);
+  const fullTopic = prefix + topic;
+
+  const agentBuilders = [
+    { name: "news_general",         fn: buildNewsGeneralHooksPrompt },
+    { name: "news_current_affairs", fn: buildCurrentAffairsHooksPrompt },
+    { name: "news_dmv_edtech",      fn: buildDmvEdtechHooksPrompt },
+    { name: "startup_news",         fn: buildStartupNewsHooksPrompt },
+    { name: "controversy_agent",    fn: buildControversyHooksPrompt },
+    { name: "personal_growth",      fn: buildPersonalGrowthHooksPrompt },
+    { name: "humor_spicy",          fn: buildHumorSpicyHooksPrompt },
+    { name: "linkedin_safe",        fn: buildLinkedinSafeHooksPrompt },
+  ];
+
+  const results = [];
+
+  for (const { name, fn } of agentBuilders) {
+    try {
+      console.log(`🔍 [hook-runner] Running agent: ${name}`);
+      const raw = await callDirectWithRetry(fn(fullTopic, region), name);
+      let parsed;
+      try { parsed = JSON.parse(raw); } catch { parsed = extractFirstJsonObject(raw); }
+      const hooksArray = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
+      for (const hook of hooksArray) {
+        results.push({
+          category: name,
+          topic,
+          region,
+          date: new Date().toISOString().split("T")[0],
+          platform: hook.platform || "LinkedIn",
+          hook_type: hook.hook_type || "general",
+          text: hook.text || "",
+          emotion_type: hook.emotion_type || "inspiration",
+          hook_style: hook.hook_style || "standard",
+        });
+      }
+      logStage(`HOOK_AGENT:${name}`, `${hooksArray.length} hooks generated`);
+    } catch (err) {
+      console.warn(`⚠️ [${name}] Hook agent failed: ${err.message}`);
+    }
+  }
+
+  return results;
+}
+
+// Step 5 — Topic Research for Hook Pipeline
+async function runHookPipeline({ region = "India", category = "startup", agentFilter = "all" }) {
+  const { data: rawSignals, source } = await fetchLiveSignals(category);
+  if (!rawSignals) throw new Error("No live signals available for hook pipeline.");
+
+  console.log(`🔍 [hook-pipeline] Cleaning signals for category: ${category}`);
+  const cleanerPrompt = buildSignalCleanerPrompt(rawSignals);
+  const signals = await callDirectWithRetry(cleanerPrompt, "hook-signal-cleaner");
+
+  // Pick top 3 topics instead of just 1
+  const topicPickerPrompt = [
+    `You are a topic selector for a social media content pipeline.`,
+    `From the signals below, pick the TOP 3 most interesting topics for a ${category} audience.`,
+    `Region: ${region}`,
+    `Output ONLY a JSON array of 3 strings, each being a short topic title.`,
+    `No explanation. No markdown. JSON only.`,
+    `Example: ["Topic A", "Topic B", "Topic C"]`,
+    `Signals:\n${signals}`
+  ].join("\n");
+
+  console.log(`🔍 [hook-pipeline] Picking top 3 topics...`);
+  const rawTopics = await callDirectWithRetry(topicPickerPrompt, "hook-topic-picker");
+  let topics;
+  try {
+    topics = JSON.parse(rawTopics);
+    if (!Array.isArray(topics)) throw new Error("Not an array");
+  } catch {
+    topics = [rawTopics.trim()]; // fallback: treat whole output as one topic
+  }
+
+  logStage("HOOK_TOPICS", topics);
+
+  const allHooks = [];
+  for (const topic of topics.slice(0, 3)) {
+    console.log(`🔍 [hook-pipeline] Running all 8 agents for topic: "${topic}"`);
+    const hooks = await runHookAgentsForTopic(topic, region, category);
+    allHooks.push(...hooks);
+    rememberTopic(topic);
+  }
+
+  logStage("HOOK_PIPELINE_COMPLETE", `${allHooks.length} total hooks generated across ${topics.length} topics`);
+  return { hooks: allHooks, source, topics };
+}
+
+// Step 7 — HTTP Endpoints for Hook Pipeline
+app.post("/generate-hooks", async (req, res) => {
+  const { region = "India", category = "startup", agent = "all" } = req.body || {};
+  try {
+    const result = await runHookPipeline({ region, category, agentFilter: agent });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+app.post("/generate-hooks/test", async (req, res) => {
+  // Runs one hardcoded topic through all 8 agents — for testing without hitting live APIs
+  const testTopic = "India's NEET exam results spark protests across 10 cities";
+  try {
+    const hooks = await runHookAgentsForTopic(testTopic, "India", "dmv_edtech");
+    res.json({ ok: true, hooks });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 app.get("/", (_req, res) => {
