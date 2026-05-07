@@ -90,11 +90,95 @@ const CATEGORY_SUBREDDITS = {
   humor: ["India", "IndianPeopleFacebook", "desimemes", "Damnthatsinteresting"]
 };
 
+// ─── REGION-SPECIFIC SUBREDDITS ─────────────────────────────────────────────
+
+const REGION_SUBREDDITS = {
+  India: {
+    startup:         ["indianstartups", "india_business", "StartupIndia", "entrepreneur", "indiehackers"],
+    edtech:          ["IndianAcademia", "jee", "UPSC", "india", "edtech"],
+    ai:              ["india", "artificial", "MachineLearning", "ChatGPT", "LocalLLaMA"],
+    healthcare:      ["india", "healthtech", "medicine", "Ayurveda"],
+    fintech:         ["IndiaInvestments", "IndianStreetBets", "personalfinance", "india", "fintech"],
+    marketing:       ["digitalmarketing", "india", "marketing", "socialmedia"],
+    news_general:    ["india", "IndiaSpeaks", "worldnews", "indianews"],
+    current_affairs: ["india", "IndiaSpeaks", "geopolitics", "worldpolitics"],
+    controversy:     ["india", "IndiaSpeaks", "unpopularopinion", "TrueOffMyChest"],
+    personal_growth: ["india", "getdisciplined", "selfimprovement", "indianstartups"],
+    humor:           ["desimemes", "IndianPeopleFacebook", "india", "dankinindia"],
+    dmv_edtech:      ["jee", "UPSC", "IndianAcademia", "india"],
+  },
+  Canada: {
+    startup:         ["canadabusiness", "canadiantech", "startups", "entrepreneur", "waterloo"],
+    edtech:          ["canada", "CanadaEducation", "learnprogramming", "edtech"],
+    ai:              ["canada", "artificial", "MachineLearning", "ChatGPT"],
+    healthcare:      ["CanadaHealthcare", "canada", "healthtech", "medicine"],
+    fintech:         ["PersonalFinanceCanada", "CanadaInvesting", "canada", "fintech"],
+    marketing:       ["canada", "marketing", "digitalmarketing", "socialmedia"],
+    news_general:    ["canada", "canadanews", "worldnews", "onguardforthee"],
+    current_affairs: ["canada", "CanadaPolitics", "geopolitics", "onguardforthee"],
+    controversy:     ["canada", "onguardforthee", "unpopularopinion", "changemyview"],
+    personal_growth: ["canada", "getdisciplined", "selfimprovement", "productivity"],
+    humor:           ["canada", "CanadaHumour", "funny", "Damnthatsinteresting"],
+    dmv_edtech:      ["canada", "CanadaEducation", "learnprogramming", "driving"],
+  },
+  US: {
+    startup:         ["startups", "entrepreneur", "ycombinator", "SaaS", "indiehackers", "soloentrepreneur"],
+    edtech:          ["edtech", "highereducation", "Teachers", "education", "learnprogramming"],
+    ai:              ["artificial", "MachineLearning", "OpenAI", "ChatGPT", "LocalLLaMA", "singularity"],
+    healthcare:      ["healthtech", "medicine", "nursing", "healthcare", "digitalhealth"],
+    fintech:         ["fintech", "personalfinance", "wallstreetbets", "stocks", "investing", "banking"],
+    marketing:       ["marketing", "socialmedia", "advertising", "copywriting", "digitalmarketing"],
+    news_general:    ["news", "worldnews", "USnews", "politics", "nottheonion"],
+    current_affairs: ["politics", "geopolitics", "worldpolitics", "economics", "neutralnews"],
+    controversy:     ["unpopularopinion", "changemyview", "AmItheAsshole", "TrueOffMyChest"],
+    personal_growth: ["getdisciplined", "selfimprovement", "decidingtobebetter", "productivity"],
+    humor:           ["funny", "Damnthatsinteresting", "mildlyinteresting", "nottheonion"],
+    dmv_edtech:      ["DMV", "driving", "learnprogramming", "edtech", "highereducation"],
+  },
+  Global: null, // null = use existing CATEGORY_SUBREDDITS (default behavior)
+};
+
+const REGION_RSS_FEEDS = {
+  India: [
+    "https://economictimes.indiatimes.com/industry/rssfeeds/13352306.cms",
+    "https://www.moneycontrol.com/rss/business.xml",
+    "https://feeds.feedburner.com/ndtvnews-latest",
+    "https://yourstory.com/feed",
+  ],
+  Canada: [
+    "https://www.cbc.ca/cmlink/rss-business",
+    "https://www.theglobeandmail.com/arc/outboundfeeds/rss/category/business/",
+    "https://betakit.com/feed/",
+    "https://financialpost.com/feed",
+  ],
+  US: [
+    "https://techcrunch.com/feed/",
+    "https://feeds.feedburner.com/entrepreneur/latest",
+    "https://www.wired.com/feed/rss",
+    "https://feeds.bloomberg.com/technology/news.rss",
+  ],
+  Global: [], // Global uses Reddit + HN only (existing behavior)
+};
+
 const DEFAULT_CATEGORY = "startup";
 
 function getSubredditsForCategory(category) {
   const normCat = (category || "").toLowerCase().trim();
   return CATEGORY_SUBREDDITS[normCat] || CATEGORY_SUBREDDITS[DEFAULT_CATEGORY];
+}
+
+function getSubredditsForRegionAndCategory(region, category) {
+  // If Global or no region, fall back to existing behavior
+  if (!region || region === "Global") {
+    return getSubredditsForCategory(category);
+  }
+
+  const regionMap = REGION_SUBREDDITS[region];
+  if (!regionMap) return getSubredditsForCategory(category);
+
+  const normCat = (category || "").toLowerCase().trim();
+  // Use region-specific subs for this category, fall back to region's startup subs
+  return regionMap[normCat] || regionMap["startup"] || getSubredditsForCategory(category);
 }
 
 // ─── 3. UTILITIES & STATE ───────────────────────────────────────────────────
@@ -188,7 +272,7 @@ function logStage(stage, value) {
 // ─── 4. PROMPTS BY AGENT TASK ────────────────────────────────────────────────
 
 // AGENT 1: STORY PICKER (Analyzes signals and selects the best topic)
-function buildStoryPickerPrompt(signals, source, recentTopics, category) {
+function buildStoryPickerPrompt(signals, source, recentTopics, category, region = "Global") {
   const recentBlock = recentTopics.length
     ? `\nAvoid repeating these recently posted topics:\n${recentTopics.join("\n")}`
     : "";
@@ -205,6 +289,11 @@ function buildStoryPickerPrompt(signals, source, recentTopics, category) {
 
   return [
     `You are a signal analyst looking for ${audience} stories worth a LinkedIn post.`,
+    "",
+    `REGION CONSTRAINT: You are selecting a story for a ${region} audience.`,
+    region === "Global"
+      ? "Any country or global story is acceptable."
+      : `ONLY pick stories directly relevant to ${region}. If no signal clearly relates to ${region}, pick the one with the most relevance and note it may be global context.`,
     "",
     `From the community signals below, pick the ONE story most worth a LinkedIn post for a ${audience} audience.`,
     "",
@@ -813,9 +902,9 @@ async function fetchRedditSubOnce(sub, baseHost, type = "hot") {
     .map((t) => `[r/${sub} ${type}] ${t}`);
 }
 
-async function fetchRedditTrends(category) {
+async function fetchRedditTrends(category, region = "Global") {
   const allTitles = [];
-  const subs = getSubredditsForCategory(category);
+  const subs = getSubredditsForRegionAndCategory(region, category);
 
   for (const sub of subs) {
     try {
@@ -893,10 +982,60 @@ async function fetchHNTrends() {
   }
 }
 
-async function fetchLiveSignals(category) {
-  const [reddit, hn] = await Promise.allSettled([
-    fetchRedditTrends(category),
+async function fetchRSSFeed(url) {
+  try {
+    const res = await axios.get(url, {
+      headers: {
+        "User-Agent": randomAgent(),
+        "Accept": "application/rss+xml, application/xml, text/xml, */*",
+      },
+      timeout: 12000,
+      validateStatus: (s) => s < 500,
+    });
+
+    const xml = res.data || "";
+
+    // Extract <title> tags from RSS items — works for RSS 2.0 and Atom
+    const itemMatches = xml.match(/<item[\s\S]*?<\/item>/gi) ||
+                        xml.match(/<entry[\s\S]*?<\/entry>/gi) || [];
+
+    const titles = itemMatches
+      .map(item => {
+        const titleMatch = item.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i);
+        return titleMatch ? titleMatch[1].trim() : null;
+      })
+      .filter(t => t && t.length > 15 && t.length < 200)
+      .slice(0, 8);
+
+    if (titles.length === 0) return null;
+
+    const domain = new URL(url).hostname.replace("www.", "");
+    return titles.map(t => `[${domain}] ${t}`).join("\n");
+  } catch (err) {
+    console.warn(`⚠️ RSS fetch failed for ${url}: ${err.message}`);
+    return null;
+  }
+}
+
+async function fetchRegionRSSFeeds(region) {
+  const feeds = REGION_RSS_FEEDS[region] || [];
+  if (feeds.length === 0) return null;
+
+  const results = await Promise.allSettled(feeds.map(url => fetchRSSFeed(url)));
+  const parts = results
+    .filter(r => r.status === "fulfilled" && r.value)
+    .map(r => r.value);
+
+  if (parts.length === 0) return null;
+  console.log(`✅ RSS: fetched ${parts.length} feeds for region ${region}`);
+  return parts.join("\n");
+}
+
+async function fetchLiveSignals(category, region = "Global") {
+  const [reddit, hn, rss] = await Promise.allSettled([
+    fetchRedditTrends(category, region),
     fetchHNTrends(),
+    fetchRegionRSSFeeds(region),
   ]);
 
   const parts = [];
@@ -904,12 +1043,17 @@ async function fetchLiveSignals(category) {
 
   if (reddit.status === "fulfilled" && reddit.value) {
     parts.push(reddit.value);
-    const subs = getSubredditsForCategory(category);
+    const subs = getSubredditsForRegionAndCategory(region, category);
     sources.push("Reddit(" + subs.map((s) => `r/${s}`).join(",") + ")");
   }
-  if (hn.status === "fulfilled" && hn.value) {
+  if (hn.status === "fulfilled" && hn.value && region === "Global") {
+    // HN is US/global-heavy — only include for Global, not for specific regions
     parts.push(hn.value);
     sources.push("Hacker News");
+  }
+  if (rss.status === "fulfilled" && rss.value) {
+    parts.push(rss.value);
+    sources.push(`RSS(${region})`);
   }
 
   if (parts.length === 0) return { data: null, source: "none" };
@@ -1170,15 +1314,15 @@ function assertPost(post, contextMsg) {
 
 // ─── 8. PIPELINES ───────────────────────────────────────────────────────────
 
-async function runAutopostPipeline(category = null) {
+async function runAutopostPipeline(category = null, region = "Global") {
   if (isPipelineRunning) {
     console.log("⚠️ Pipeline already running. Skipping concurrent trigger.");
     return;
   }
   isPipelineRunning = true;
   try {
-    console.log(`🔍 Fetching live signals for autopost (Category: ${category || DEFAULT_CATEGORY})...`);
-  const { data: rawSignals, source } = await fetchLiveSignals(category);
+    console.log(`🔍 Fetching live signals for autopost (Category: ${category || DEFAULT_CATEGORY}, Region: ${region})...`);
+  const { data: rawSignals, source } = await fetchLiveSignals(category, region);
 
   if (!rawSignals) {
     throw new Error("All live signal sources failed. Cannot run autopost without real data.");
@@ -1189,7 +1333,7 @@ async function runAutopostPipeline(category = null) {
   
   logStage("LIVE_SIGNALS", signals);
 
-  const pickerPrompt = buildStoryPickerPrompt(signals, source, recentTopics, category);
+  const pickerPrompt = buildStoryPickerPrompt(signals, source, recentTopics, category, region);
   const chosenStory = await callDirectWithRetry(pickerPrompt, "story-picker");
 
   if (!chosenStory?.trim() || chosenStory.trim().toUpperCase() === "SKIP") {
@@ -1566,8 +1710,15 @@ app.post("/webhook", async (req, res) => {
       } else if (text.toLowerCase() === "autopost" || text.startsWith("/autopost")) {
         const args = text.split(" ").slice(1);
         const category = args[0] ? args[0].toLowerCase() : DEFAULT_CATEGORY;
-        await safeSendMessage(chatId, `⏳ Fetching signals for ${category}...`);
-        const { post, source, chosenStory, imageUrl, imageConcept } = await runAutopostPipeline(category);
+        let region = "Global";
+        if (args[1]) {
+          const normReg = args[1].toLowerCase().trim();
+          if (normReg === "india") region = "India";
+          else if (normReg === "canada") region = "Canada";
+          else if (normReg === "us" || normReg === "usa") region = "US";
+        }
+        await safeSendMessage(chatId, `⏳ Fetching signals for ${category} (Region: ${region})...`);
+        const { post, source, chosenStory, imageUrl, imageConcept } = await runAutopostPipeline(category, region);
         await safeSendMessage(chatId, `📡 Sources: ${source}\n🎯 Story: ${chosenStory}`);
         await sendPhoto(chatId, imageUrl, post);
         await safeSendMessage(chatId, `🧠 Visual Spec\n\n${imageConceptToText(imageConcept)}`);
@@ -1790,7 +1941,7 @@ async function runHookAgentsForTopic(topic, region, category) {
 
 // Step 5 — Topic Research for Hook Pipeline
 async function runHookPipeline({ region = "India", category = "startup", agentFilter = "all" }) {
-  const { data: rawSignals, source } = await fetchLiveSignals(category);
+  const { data: rawSignals, source } = await fetchLiveSignals(category, region);
   if (!rawSignals) throw new Error("No live signals available for hook pipeline.");
 
   console.log(`🔍 [hook-pipeline] Cleaning signals for category: ${category}`);
