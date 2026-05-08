@@ -25,6 +25,20 @@ process.on("uncaughtException", (err) => {
 // ─── 1. CONFIGURATION & CONSTANTS ───────────────────────────────────────────
 let isPipelineRunning = false;
 
+// ─── PENDING IMAGE REQUESTS ──────────────────────────────────────────────────
+// Keyed by chatId. Stores data needed to generate image on user's YES reply.
+const pendingImageRequests = {};
+// { [chatId]: { topic, post, imageConcept, expiresAt } }
+
+const PENDING_IMAGE_TTL_MS = 10 * 60 * 1000; // 10 minutes — auto-expire stale requests
+
+// ─── PENDING TOPIC SELECTIONS ─────────────────────────────────────────────────
+// Keyed by chatId. Stores news headlines shown to user so they can pick 1–5.
+const pendingTopicSelections = {};
+// { [chatId]: { topic, headlines: [{title, source}], expiresAt } }
+
+const PENDING_TOPIC_TTL_MS = 5 * 60 * 1000; // 5 minutes to pick a headline
+
 // Optimize sharp for production memory usage
 sharp.cache(false);
 
@@ -89,6 +103,7 @@ const CATEGORY_SUBREDDITS = {
   personal_growth: ["getdisciplined", "selfimprovement", "decidingtobebetter", "productivity"],
   humor: ["India", "IndianPeopleFacebook", "desimemes", "Damnthatsinteresting"]
 };
+
 
 // ─── REGION-SPECIFIC SUBREDDITS ─────────────────────────────────────────────
 
@@ -639,6 +654,8 @@ async function callImageAPI(prompt) {
   return `https://image.pollinations.ai/prompt/${cleanedPrompt}?width=1024&height=1024&nologo=true&seed=${seed}`;
 }
 
+
+
 function extractFirstJsonObject(text) {
   const raw = String(text || "").trim();
   if (!raw) return null;
@@ -1060,7 +1077,64 @@ async function fetchLiveSignals(category, region = "Global") {
   return { data: parts.join("\n"), source: sources.join(" + ") };
 }
 
-// ─── 6. LLM API WRAPPERS (OpenRouter & OpenClaw) ────────────────────────────
+// ─── TOPIC HEADLINE SEARCH (Google News RSS — no API key required) ────────────
+
+async function fetchTopicHeadlines(topic) {
+  const query = encodeURIComponent(topic);
+  const url = `https://news.google.com/rss/search?q=${query}&hl=en-US&gl=US&ceid=US:en`;
+
+  try {
+    const res = await axios.get(url, {
+      headers: {
+        "User-Agent": randomAgent(),
+        "Accept": "application/rss+xml, application/xml, text/xml, */*",
+      },
+      timeout: 15000,
+      validateStatus: (s) => s < 500,
+    });
+
+    const xml = res.data || "";
+
+    // Extract <item> blocks
+    const itemMatches = xml.match(/<item[\s\S]*?<\/item>/gi) || [];
+
+    const headlines = [];
+    for (const item of itemMatches) {
+      if (headlines.length >= 5) break;
+
+      // Extract title (strip CDATA if present)
+      const titleMatch = item.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i);
+      const rawTitle = titleMatch ? titleMatch[1].trim() : null;
+      if (!rawTitle || rawTitle.length < 10) continue;
+
+      // Strip HTML entities
+      const title = rawTitle
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .trim();
+
+      // Extract source name
+      const sourceMatch = item.match(/<source[^>]*>([\s\S]*?)<\/source>/i);
+      const source = sourceMatch ? sourceMatch[1].trim() : "News";
+
+      // Extract URL
+      const linkMatch = item.match(/<link>([\s\S]*?)<\/link>/i);
+      const url = linkMatch ? linkMatch[1].trim() : "";
+
+      headlines.push({ title, source, url });
+    }
+
+    return headlines;
+  } catch (err) {
+    console.warn(`⚠️ [topic-headlines] Google News fetch failed: ${err.message}`);
+    return [];
+  }
+}
+
+
 
 function isTransient(err) {
   const msg = (err?.message || String(err)).toLowerCase();
@@ -1364,10 +1438,20 @@ async function runAutopostPipeline(category = null, region = "Global") {
     blueprint = painPoint; // raw-text fallback
   }
 
+  // ── Hook Generation (runs in parallel with no blocking — 3 agents) ──────────
+  console.log("🪝 [hook-gen] Generating viral hook candidates...");
+  const hookCandidates = await runHookGenerationForPost(chosenStory.trim(), region);
+  const bestHook = await pickBestHookForPost(hookCandidates, chosenStory.trim());
+  if (bestHook) logStage("BEST_HOOK", bestHook);
+
   // ── Post Writer — Draft 1 ─────────────────────────────────────────────────
-  const blueprintInput = typeof blueprint === "string"
+  const blueprintBase = typeof blueprint === "string"
     ? `${chosenStory.trim()}\nContext/Pain Point: ${painPoint}\nBlueprint: ${blueprint}`
     : `${chosenStory.trim()}\nContext/Pain Point: ${painPoint}\nBlueprint: ${JSON.stringify(blueprint, null, 2)}`;
+
+  const blueprintInput = bestHook
+    ? `${blueprintBase}\n\nMANDATORY OPENING HOOK — You MUST use this exact line as the very first line of the post, word-for-word:\n"${bestHook}"`
+    : blueprintBase;
 
   const writerPrompt = buildPostWriterPrompt(blueprintInput);
   let draft1 = await callDirectWithRetry(writerPrompt, "post-writer-draft1");
@@ -1418,18 +1502,17 @@ async function runAutopostPipeline(category = null, region = "Global") {
   const polisherPrompt = buildPostPolisherPrompt(rawPost);
   const post = await callDirectWithRetry(polisherPrompt, "post-polisher");
 
-  console.log("🎨 Designing image concept...");
+  // Build image concept now (cheap LLM call) but do NOT generate image yet
+  console.log("🎨 Preparing image concept (image deferred until user confirms)...");
   const imageConceptPrompt = buildImageConceptPrompt(chosenStory.trim(), post);
   const imageConceptRaw = await callDirectWithRetry(imageConceptPrompt, "image-concept");
   const imageConcept = normalizeImageConcept(imageConceptRaw, chosenStory.trim());
-  const imageBackgroundUrl = await callImageAPI(imageConcept.visual);
-  const imageUrl = await renderImageWithText(imageBackgroundUrl, imageConcept);
 
   assertPost(post, "autopost");
   rememberTopic(chosenStory.trim());
   logStage("FINAL_POST", post);
   logStage("IMAGE_CONCEPT", imageConcept);
-    return { post, source, chosenStory: chosenStory.trim(), imageUrl, imageConcept };
+    return { post, source, chosenStory: chosenStory.trim(), imageConcept };
   } finally {
     isPipelineRunning = false;
   }
@@ -1464,10 +1547,20 @@ async function runTopicPostPipeline(topic) {
     blueprint = painPoint;
   }
 
+  // ── Hook Generation (runs in parallel — 3 agents) ──────────────────────────
+  console.log("🪝 [hook-gen] Generating viral hook candidates...");
+  const hookCandidates = await runHookGenerationForPost(topic);
+  const bestHook = await pickBestHookForPost(hookCandidates, topic);
+  if (bestHook) logStage("BEST_HOOK", bestHook);
+
   // ── Post Writer — Draft 1 ─────────────────────────────────────────────────
-  const blueprintInput = typeof blueprint === "string"
+  const blueprintBase = typeof blueprint === "string"
     ? `${topic}\nContext/Pain Point: ${painPoint}\nBlueprint: ${blueprint}`
     : `${topic}\nContext/Pain Point: ${painPoint}\nBlueprint: ${JSON.stringify(blueprint, null, 2)}`;
+
+  const blueprintInput = bestHook
+    ? `${blueprintBase}\n\nMANDATORY OPENING HOOK — You MUST use this exact line as the very first line of the post, word-for-word:\n"${bestHook}"`
+    : blueprintBase;
 
   const draft1Prompt = buildTopicPostPrompt(blueprintInput);
   let draft1 = await callDirectWithRetry(draft1Prompt, "topic-post-draft1");
@@ -1517,18 +1610,17 @@ async function runTopicPostPipeline(topic) {
   const polisherPrompt = buildPostPolisherPrompt(rawPost);
   const post = await callDirectWithRetry(polisherPrompt, "topic-polisher");
 
-  console.log("🎨 Designing image concept...");
+  // Build image concept but defer actual image generation
+  console.log("🎨 Preparing image concept (image deferred until user confirms)...");
   const imageConceptPrompt = buildImageConceptPrompt(topic, post);
   const imageConceptRaw = await callDirectWithRetry(imageConceptPrompt, "image-concept-manual");
   const imageConcept = normalizeImageConcept(imageConceptRaw, topic);
-  const imageBackgroundUrl = await callImageAPI(imageConcept.visual);
-  const imageUrl = await renderImageWithText(imageBackgroundUrl, imageConcept);
 
   assertPost(post, "topic-post");
   rememberTopic(topic);
   logStage("FINAL_POST", post);
   logStage("IMAGE_CONCEPT", imageConcept);
-  return { post, imageUrl, imageConcept };
+  return { post, imageConcept };
 }
 
 async function runResearchPipeline(topic) {
@@ -1555,12 +1647,11 @@ async function runResearchPipeline(topic) {
   const socialPost = socialSectionMatch ? socialSectionMatch[1].trim() : "Social post generation failed.";
   const researchBrief = fullResponse.replace(/## SOCIAL POSTS[\s\S]*?(?=## DISTRIBUTION|$)/i, "✅ *Social Posts generated below*").trim();
 
-  console.log("🎨 Designing image concept...");
+  // Build image concept but defer image generation
+  console.log("🎨 Preparing image concept (image deferred until user confirms)...");
   const imageConceptPrompt = buildImageConceptPrompt(topic, socialPost);
   const imageConceptRaw = await callDirectWithRetry(imageConceptPrompt, "image-concept-research");
   const imageConcept = normalizeImageConcept(imageConceptRaw, topic);
-  const imageBackgroundUrl = await callImageAPI(imageConcept.visual);
-  const imageUrl = await renderImageWithText(imageBackgroundUrl, imageConcept);
 
   rememberTopic(topic);
   logStage("CONTENT_BRIEF", researchBrief);
@@ -1569,9 +1660,42 @@ async function runResearchPipeline(topic) {
     post: socialPost,
     analysis: "📊 Content Brief Analysis Complete.",
     sources: researchBrief,
-    imageUrl,
     imageConcept
   };
+}
+
+// ─── ON-DEMAND IMAGE GENERATOR ──────────────────────────────────────────────
+
+async function generateAndSendImage(chatId) {
+  const pending = pendingImageRequests[chatId];
+
+  if (!pending) {
+    await safeSendMessage(chatId, "⚠️ No pending image request. Run /autopost or /post first.");
+    return;
+  }
+
+  // Check expiry
+  if (Date.now() > pending.expiresAt) {
+    delete pendingImageRequests[chatId];
+    await safeSendMessage(chatId, "⏰ Image request expired (10 min limit). Run the command again.");
+    return;
+  }
+
+  await safeSendMessage(chatId, "🎨 Generating image...");
+
+  try {
+    const imageBackgroundUrl = await callImageAPI(pending.imageConcept.visual);
+    const imageUrl = await renderImageWithText(imageBackgroundUrl, pending.imageConcept);
+    await sendPhoto(chatId, imageUrl, pending.post.slice(0, 1024));
+    await safeSendMessage(chatId, `🧠 Visual Spec\n\n${imageConceptToText(pending.imageConcept)}`);
+    console.log(`✅ [on-demand-image] Image generated and sent for chatId ${chatId}`);
+  } catch (err) {
+    console.error(`❌ [on-demand-image] Failed: ${err.message}`);
+    await safeSendMessage(chatId, `❌ Image generation failed: ${err.message}`);
+  } finally {
+    // Always clear pending — force user to re-run command for a fresh image
+    delete pendingImageRequests[chatId];
+  }
 }
 
 // ─── 9. TELEGRAM WEBHOOK ────────────────────────────────────────────────────
@@ -1657,26 +1781,61 @@ app.post("/webhook", async (req, res) => {
 
       if (text.toLowerCase() === "generate" || text.startsWith("/generate")) {
         await safeSendMessage(chatId, "⏳ Scanning startup signals, picking story, and writing post...");
-        const { post, imageUrl, imageConcept } = await runGeneratePipeline();
-        await sendPhoto(chatId, imageUrl, post);
-        await safeSendMessage(chatId, `🧠 Visual Spec\n\n${imageConceptToText(imageConcept)}`);
+        const { post, imageConcept } = await runGeneratePipeline();
+        await sendChunked(chatId, post);
+        pendingImageRequests[chatId] = {
+          topic: "startup signal",
+          post,
+          imageConcept,
+          expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
+        };
+        await safeSendMessage(chatId, "✅ Post ready!\n\nWant an image? Reply YES to generate it.");
 
       } else if (text.startsWith("/post ")) {
         const topic = text.replace("/post", "").trim();
         if (!topic) return safeSendMessage(chatId, "Usage: /post <topic>");
-        await safeSendMessage(chatId, `⏳ Writing post about "${topic}"...`);
-        const { post, imageUrl, imageConcept } = await runTopicPostPipeline(topic);
-        await sendPhoto(chatId, imageUrl, post);
-        await safeSendMessage(chatId, `🧠 Visual Spec\n\n${imageConceptToText(imageConcept)}`);
+        await safeSendMessage(chatId, `🔍 Searching latest news about "${topic}"...`);
+
+        const headlines = await fetchTopicHeadlines(topic);
+
+        if (headlines.length === 0) {
+          // Fallback: no news found — write directly from LLM knowledge
+          await safeSendMessage(chatId, `⚠️ Couldn't find live news for "${topic}". Writing from existing knowledge...`);
+          const { post, imageConcept } = await runTopicPostPipeline(topic);
+          await sendChunked(chatId, post);
+          pendingImageRequests[chatId] = { topic, post, imageConcept, expiresAt: Date.now() + PENDING_IMAGE_TTL_MS };
+          await safeSendMessage(chatId, "✅ Post ready!\n\nWant an image? Reply YES to generate it.");
+        } else {
+          // Show numbered headlines for user to pick
+          const list = headlines.map((h, i) =>
+            `${i + 1}. ${h.title}\n   — ${h.source}`
+          ).join("\n\n");
+
+          pendingTopicSelections[chatId] = {
+            topic,
+            headlines,
+            expiresAt: Date.now() + PENDING_TOPIC_TTL_MS
+          };
+
+          await safeSendMessage(chatId,
+            `📰 Found ${headlines.length} recent news articles about "${topic}":\n\n${list}\n\nReply with a number (1–${headlines.length}) to pick which one to write about.`
+          );
+        }
 
       } else if (text.startsWith("/research ")) {
         const goal = text.replace("/research", "").trim();
         if (!goal) return safeSendMessage(chatId, "Usage: /research <goal>");
         await safeSendMessage(chatId, `🚀 Researching "${goal}" autonomously...`);
         const result = await runResearchPipeline(goal);
-        await sendPhoto(chatId, result.imageUrl, result.post);
-        await safeSendMessage(chatId, `🧠 Visual Spec\n\n${imageConceptToText(result.imageConcept)}`);
+        await sendChunked(chatId, result.post);
         await safeSendMessage(chatId, `🔗 Sources:\n${result.sources}`);
+        pendingImageRequests[chatId] = {
+          topic: goal,
+          post: result.post,
+          imageConcept: result.imageConcept,
+          expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
+        };
+        await safeSendMessage(chatId, "✅ Research + post ready!\n\nWant an image? Reply YES to generate it.");
 
       } else if (text.startsWith("/hooks ") || text === "/hooks") {
         // Usage: /hooks [region] [category]
@@ -1710,21 +1869,65 @@ app.post("/webhook", async (req, res) => {
       } else if (text.toLowerCase() === "autopost" || text.startsWith("/autopost")) {
         const args = text.split(" ").slice(1);
         const category = args[0] ? args[0].toLowerCase() : DEFAULT_CATEGORY;
-        let region = "Global";
-        if (args[1]) {
-          const normReg = args[1].toLowerCase().trim();
-          if (normReg === "india") region = "India";
-          else if (normReg === "canada") region = "Canada";
-          else if (normReg === "us" || normReg === "usa") region = "US";
+        const region = args[1] ? (args[1].charAt(0).toUpperCase() + args[1].slice(1).toLowerCase()) : "Global";
+        await safeSendMessage(chatId, `⏳ Fetching signals for ${category} / ${region}...`);
+        const { post, source, chosenStory, imageConcept } = await runAutopostPipeline(category, region);
+        await safeSendMessage(chatId, `📡 Sources: ${source}\n🌍 Region: ${region}\n🎯 Story: ${chosenStory}`);
+        await sendChunked(chatId, post);
+        pendingImageRequests[chatId] = {
+          topic: chosenStory,
+          post,
+          imageConcept,
+          expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
+        };
+        await safeSendMessage(chatId, "✅ Post ready!\n\nWant an image? Reply YES to generate it.");
+
+      } else if (text.toLowerCase() === "yes" || text.toLowerCase() === "/yes") {
+        await generateAndSendImage(chatId);
+
+      } else if (/^[1-5]$/.test(text.trim()) && pendingTopicSelections[chatId]) {
+        // User is picking a headline from the /post flow
+        const pending = pendingTopicSelections[chatId];
+
+        if (Date.now() > pending.expiresAt) {
+          delete pendingTopicSelections[chatId];
+          await safeSendMessage(chatId, "⏰ Selection expired (5 min limit). Run /post again.");
+        } else {
+          const idx = parseInt(text.trim(), 10) - 1;
+          const chosen = pending.headlines[idx];
+
+          if (!chosen) {
+            await safeSendMessage(chatId, `❌ Invalid choice. Please reply with a number between 1 and ${pending.headlines.length}.`);
+          } else {
+            delete pendingTopicSelections[chatId];
+            const chosenHeadline = `${chosen.title} (Source: ${chosen.source})`;
+            await safeSendMessage(chatId, `✅ Got it! Writing post on:\n"${chosen.title}"\n\n⏳ Running pipeline...`);
+            const { post, imageConcept } = await runTopicPostPipeline(chosenHeadline);
+            await sendChunked(chatId, post);
+            pendingImageRequests[chatId] = {
+              topic: chosen.title,
+              post,
+              imageConcept,
+              expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
+            };
+            await safeSendMessage(chatId, "✅ Post ready!\n\nWant an image? Reply YES to generate it.");
+          }
         }
-        await safeSendMessage(chatId, `⏳ Fetching signals for ${category} (Region: ${region})...`);
-        const { post, source, chosenStory, imageUrl, imageConcept } = await runAutopostPipeline(category, region);
-        await safeSendMessage(chatId, `📡 Sources: ${source}\n🎯 Story: ${chosenStory}`);
-        await sendPhoto(chatId, imageUrl, post);
-        await safeSendMessage(chatId, `🧠 Visual Spec\n\n${imageConceptToText(imageConcept)}`);
 
       } else if (text.startsWith("/start") || text.startsWith("/help")) {
-        await safeSendMessage(chatId, "Commands:\n/generate\n/autopost [cat]\n/post <topic>\n/research <goal>\n/hooks [region] [category] — Run 8-agent hook pipeline\n/hooktopic <topic> | <region> — Run hooks for a specific topic");
+        await safeSendMessage(chatId, [
+          "📋 Commands:",
+          "/generate — Auto-pick a startup story and write a post",
+          "/autopost [category] [region] — e.g. /autopost edtech india",
+          "/post <topic> — Search latest news, pick 1–5, write a post",
+          "/research <goal> — Deep research brief + post",
+          "/hooks [region] [category] — Run 8-agent hook pipeline",
+          "/hooktopic <topic> | <region> — Run hooks for a specific topic",
+          "",
+          "After /post: reply 1–5 to choose which news article to write about.",
+          "After any post: reply YES to generate an image.",
+          "Images expire in 10 min, news selection expires in 5 min."
+        ].join("\n"));
       }
     } catch (err) {
       await safeSendMessage(chatId, `❌ Error: ${err.message}`);
@@ -1735,6 +1938,74 @@ app.post("/webhook", async (req, res) => {
 });
 
 // ─── 10. HOOK PIPELINE ──────────────────────────────────────────────────────
+
+// ─── HOOK GENERATION FOR POST PIPELINE ──────────────────────────────────────
+// Runs 3 LinkedIn-relevant hook agents in parallel and returns all hook texts.
+// Intentionally excludes humor/spicy and dmv-specific agents to keep tone professional.
+
+async function runHookGenerationForPost(topic, region = "Global") {
+  const prefix = getRegionPrefix(region);
+  const fullTopic = prefix ? `${prefix}${topic}` : topic;
+
+  const agentPairs = [
+    { name: "startup_news",    fn: buildStartupNewsHooksPrompt },
+    { name: "personal_growth", fn: buildPersonalGrowthHooksPrompt },
+    { name: "linkedin_safe",   fn: buildLinkedinSafeHooksPrompt },
+  ];
+
+  const results = await Promise.allSettled(
+    agentPairs.map(({ name, fn }) =>
+      callDirectWithRetry(fn(fullTopic, region), `hook-gen:${name}`)
+        .then(raw => {
+          let parsed;
+          try { parsed = JSON.parse(raw); } catch { parsed = extractFirstJsonObject(raw); }
+          return Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
+        })
+        .catch(() => [])
+    )
+  );
+
+  const hooks = [];
+  for (const r of results) {
+    if (r.status === "fulfilled") {
+      for (const h of r.value) {
+        if (h && h.text && h.text.trim().length > 10) {
+          hooks.push(h.text.trim());
+        }
+      }
+    }
+  }
+
+  console.log(`🪝 [hook-gen] Generated ${hooks.length} hook candidates`);
+  return hooks;
+}
+
+// Uses a fast LLM call to pick the single best hook for virality.
+async function pickBestHookForPost(hooks, topic) {
+  if (!hooks || hooks.length === 0) return null;
+  if (hooks.length === 1) return hooks[0];
+
+  const prompt = [
+    `You are a LinkedIn virality expert. Pick the SINGLE most attention-grabbing, scroll-stopping opening line for a LinkedIn post about: "${topic}"`,
+    "",
+    "Hook candidates:",
+    hooks.map((h, i) => `${i + 1}. ${h}`).join("\n"),
+    "",
+    "Rules:",
+    "- Pick the one that creates the most curiosity, tension, or contrast",
+    "- Prefer specific and bold over vague and inspirational",
+    "- Output ONLY the exact text of the winning hook. No number. No preamble. No explanation."
+  ].join("\n");
+
+  try {
+    const best = await callDirectWithRetry(prompt, "hook-picker");
+    return best.trim();
+  } catch (err) {
+    console.warn(`⚠️ [hook-picker] Failed, using first hook as fallback: ${err.message}`);
+    return hooks[0];
+  }
+}
+
 
 // Step 2 — Region Prefix Helper
 function getRegionPrefix(region) {
