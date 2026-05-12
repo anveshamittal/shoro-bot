@@ -293,14 +293,14 @@ function buildStoryPickerPrompt(signals, source, recentTopics, category, region 
     : "";
 
   const audienceMap = {
-    startup: "founder and startup",
+    startup: "operator and startup",
     edtech: "edtech and education",
     ai: "AI and tech",
     healthcare: "healthcare and healthtech",
     fintech: "fintech and finance"
   };
 
-  const audience = audienceMap[(category || "").toLowerCase()] || "founder and startup";
+  const audience = audienceMap[(category || "").toLowerCase()] || "operator and startup";
 
   return [
     `You are a signal analyst looking for ${audience} stories worth a LinkedIn post.`,
@@ -312,12 +312,35 @@ function buildStoryPickerPrompt(signals, source, recentTopics, category, region 
     "",
     `From the community signals below, pick the ONE story most worth a LinkedIn post for a ${audience} audience.`,
     "",
-    "PICK criteria — it must be ONE of:",
-    "  → A major business milestone, revenue breakthrough, or pivot with a lesson",
-    "  → A significant AI shift or tech advancement that concretely affects how businesses operate",
-    "  → A controversial or highly debated topic in the ecosystem",
-    "  → A specific, raw story about failure, success, or a hard-learned realization",
-    "  → A shift in market dynamics or consumer behavior worth noting",
+    "Evaluate for:",
+    "  → discussion potential",
+    "  → identity signaling",
+    "  → repostability",
+    "  → \"would smart people argue about this?\"",
+    "",
+    "PICK stories that:",
+    "  → reveal a shift in behavior, markets, or technology",
+    "  → expose hidden incentives or contradictions",
+    "  → create strong professional opinions",
+    "  → make smart people want to discuss or repost",
+    "  → contain tension, conflict, or strategic implications",
+    "  → feel culturally relevant right now",
+    "",
+    "Strong examples:",
+    "  → AI replacing workflows",
+    "  → startup pivots",
+    "  → consumer backlash",
+    "  → fintech infrastructure shifts",
+    "  → controversial product decisions",
+    "  → creator economy changes",
+    "  → internet-driven brand crises",
+    "",
+    "Weak examples:",
+    "  → discounts",
+    "  → generic product launches",
+    "  → low-emotion announcements",
+    "  → feature updates without implications",
+    "  → informational news with no discussion angle",
     "",
     "REJECT anything that is:",
     "  ❌ A minor patch, config tweak, or irrelevant story",
@@ -337,25 +360,25 @@ function buildStoryPickerPrompt(signals, source, recentTopics, category, region 
 // ─── AGENT STYLES ──────────────────────────────────────────────────────────
 
 const POST_STYLES = [
-  "Story → realization → punchline",
-  "Sharp one-liner → breakdown → twist",
-  "Contrarian take → example → insight",
-  "Personal failure → lesson (implicit, not preachy)",
-  "Observation → uncomfortable truth → mic drop",
-  "Mini case study (with numbers) → unexpected insight",
-  "Short chaotic thoughts → converge into one idea",
-  "Dialogue format (very minimal, realistic)",
-  "The 'Reverse Hook' (start with the final result, then explain the hidden cost)",
-  "The 'Industry Myth-Buster' (call out a common belief and replace it with reality)",
-  "Scene-setting (describe a specific moment in a room/meeting) → the takeaway",
-  "The 'Why this matters' (starts with a boring fact, ends with a terrifying/exciting implication)"
+  "Sharp observation → implication",
+  "Contrarian insight → explanation",
+  "Internet behavior → business lesson",
+  "Specific event → hidden market shift",
+  "Simple statement → uncomfortable implication",
+  "Product/company decision → strategic insight",
+  "Cultural trend → operator observation",
+  "Short analytical breakdown",
+  "One surprising realization carried to conclusion",
+  "Consumer behavior decoded",
+  "Calm operator commentary",
+  "Quietly pessimistic industry observation"
 ];
 
 function getRandomStyle() {
   return POST_STYLES[Math.floor(Math.random() * POST_STYLES.length)];
 }
 
-// AGENT 2: POST WRITER (Writes a viral founder-style post from a chosen story)
+// AGENT 2: POST WRITER (Writes a high-impact post from a chosen story)
 function buildPostWriterPrompt(chosenStory) {
   const style = getRandomStyle();
   return [
@@ -366,27 +389,28 @@ function buildPostWriterPrompt(chosenStory) {
     "Rules:",
     "Topic ≠ Post",
     "Turn the topic into a specific moment, NOT a general idea.",
+    "LANGUAGE: Use simple, easy-to-understand English. Avoid complex jargon and keep sentences clear and straightforward.",
+    "",
+    "VOICE:",
+    "Write like an intelligent operator reacting to something interesting happening in business, tech, or culture.",
+    "NOT: motivational speaker, startup guru, productivity influencer, consultant, corporate brand account",
+    "The tone should feel: observant, grounded, concise, slightly opinionated, internet-aware, emotionally believable.",
     "",
     "TRUTH CONSTRAINT:",
-    "- Do NOT fabricate personal experiences (e.g., do NOT say 'I had a call' or 'I raised money' if it didn't happen).",
-    "- Use an OBSERVATIONAL founder voice (e.g., 'Watching this happen...', 'I'm looking at these numbers...').",
-    "- Keep it grounded in the provided research data.",
+    "- Do NOT fabricate: personal stories, calls, meetings, customer conversations, statistics, revenue numbers, timelines, unless explicitly provided in source material.",
+    "- Do NOT manufacture drama.",
+    "- Only use concrete details explicitly present in source material.",
     "",
     "SINGLE NARRATIVE THREAD:",
     "- Stick to ONE company, ONE event, or ONE situation.",
     "- Do NOT merge multiple unrelated stories into one post.",
     "",
-    "Anchor with ONE concrete detail",
-    "(number, timeframe, metric, or specific action)",
-    "",
-    "Write like a founder thinking out loud",
-    "NOT teaching, NOT advising",
-    "",
     "Avoid predictable structure",
-    "Some posts can be:",
-    "- very short (3–5 lines)",
-    "- medium (8–15 lines)",
-    "- slightly longer if needed",
+    "Vary post length based on the topic:",
+    "- very short (30-50 words)",
+    "- medium (80-120 words)",
+    "- slightly longer if needed (150-250 words)",
+    "DO NOT exceed 300 words.",
     "",
     "Vary rhythm:",
     "Do NOT use multiple empty lines between paragraphs.",
@@ -399,6 +423,7 @@ function buildPostWriterPrompt(chosenStory) {
     "No “Here are 5 tips”",
     "No “In today’s world”",
     "No “Businesses should”",
+    "Avoid: 'This is huge', 'Game changer', 'Let that sink in', 'The future belongs to', 'I realized something', 'This says a lot about'",
     "",
     "KILL GENERIC ENDINGS:",
     "- Avoid philosophical closing lines about 'the world' or 'innovation'.",
@@ -411,6 +436,8 @@ function buildPostWriterPrompt(chosenStory) {
     "Hook:",
     "First line must create curiosity, tension, or contrast",
     "But vary the style of hook (question, statement, contradiction, etc.)",
+    "",
+    "The best posts sound like: 'Someone smart noticed something important before everyone else did.'",
     "",
     "Output:",
     "Plain text only",
@@ -432,18 +459,24 @@ function buildTopicPostPrompt(topic) {
     "Rules:",
     "Topic ≠ Post",
     "Turn the topic into a specific moment, NOT a general idea.",
+    "LANGUAGE: Use simple, clear, and easy-to-understand English. Avoid heavy jargon.",
+    "",
+    "VOICE:",
+    "Write like an intelligent operator reacting to something interesting happening in business, tech, or culture.",
+    "NOT: motivational speaker, startup guru, productivity influencer, consultant, corporate brand account",
+    "The tone should feel: observant, grounded, concise, slightly opinionated, internet-aware, emotionally believable.",
     "",
     "TRUTH CONSTRAINT:",
-    "- Do NOT fabricate personal experiences.",
-    "- Use an OBSERVATIONAL founder voice.",
-    "",
-    "Anchor with ONE concrete detail",
-    "(number, timeframe, metric, or specific action)",
-    "",
-    "Write like a founder thinking out loud",
-    "NOT teaching, NOT advising",
+    "- Do NOT fabricate: personal stories, calls, meetings, customer conversations, statistics, revenue numbers, timelines, unless explicitly provided in source material.",
+    "- Do NOT manufacture drama.",
+    "- Only use concrete details explicitly present in source material.",
     "",
     "Avoid predictable structure",
+    "Vary post length based on the topic:",
+    "- very short (30-50 words)",
+    "- medium (80-120 words)",
+    "- slightly longer if needed (150-250 words)",
+    "DO NOT exceed 300 words.",
     "",
     "Vary rhythm:",
     "Mix short punchy lines with occasional longer ones",
@@ -453,6 +486,8 @@ function buildTopicPostPrompt(topic) {
     "",
     "KILL GENERIC ENDINGS:",
     "- End with a sharp realization, an unresolved tension, or a specific thought.",
+    "",
+    "The best posts sound like: 'Someone smart noticed something important before everyone else did.'",
     "",
     "Output:",
     "Plain text only",
@@ -481,28 +516,54 @@ function buildSignalCleanerPrompt(signals) {
   ].join("\n");
 }
 
-// AGENT 5: PAIN POINT EXTRACTOR (Extracts the 'uncomfortable truth' from a story)
-function buildPainPointExtractorPrompt(chosenStory) {
+// AGENT 5: HIDDEN IMPLICATION EXTRACTOR (Extracts the underlying shift from a story)
+function buildHiddenImplicationExtractorPrompt(chosenStory) {
   return [
-    "You are a deep-dive analyst. You see the human pain point behind every news headline.",
+    "You are a deep-dive analyst.",
     "",
     `Topic: ${chosenStory}`,
     "",
-    "Task: Extract ONE specific, raw, or uncomfortable truth/pain point that a founder would care about in this story.",
-    "Why does this matter to a human? What was the mistake? What is the hidden friction?",
+    "Task: Extract the hidden business implication behind this story.",
     "",
-    "Example:",
-    "Story: 'Stripe acquires Bridge'",
-    "Pain Point: 'Building your own stablecoin infrastructure from scratch is officially a waste of time for 99% of startups.'",
+    "Focus on:",
+    "- incentive shifts",
+    "- market dynamics",
+    "- user behavior",
+    "- strategic risks",
+    "- operational realities",
+    "- changing expectations",
     "",
-    "Output exactly one sentence. No intro."
+    "Avoid motivational framing.",
+    "Avoid therapy language.",
+    "",
+    "Output exactly one sharp observation. No intro."
   ].join("\n");
 }
 
-// AGENT 6 (new): ARGUMENT ARCHITECT (Converts pain-point insight into a JSON content blueprint)
+function buildDiscussionAnglePrompt(chosenStory, hiddenShift) {
+  return [
+    "Before writing the post, evaluate:",
+    "Does this topic create natural disagreement?",
+    "Does it reveal a hidden shift?",
+    "Does it affect how people work/build/invest?",
+    "Would someone repost this to signal intelligence or awareness?",
+    "Does it contain emotional or strategic tension?",
+    "",
+    `Topic: ${chosenStory}`,
+    `Hidden Shift: ${hiddenShift}`,
+    "",
+    "If NO to most:",
+    "Output SKIP",
+    "",
+    "If YES:",
+    "Output the primary discussion angle in one sharp sentence."
+  ].join("\n");
+}
+
+// AGENT 6 (new): ARGUMENT ARCHITECT (Converts implication insight into a JSON content blueprint)
 function buildArgumentArchitectSystemPrompt() {
   return [
-    "You are a narrative architect. You receive a raw insight about a founder topic and convert it into a structured content blueprint. Do not write any LinkedIn post. Only output a JSON object and nothing else — no preamble, no markdown backticks.",
+    "You are a narrative architect. You receive a raw insight about a business topic and convert it into a structured content blueprint. Do not write any LinkedIn post. Only output a JSON object and nothing else — no preamble, no markdown backticks.",
     "",
     "Output format:",
     "{",
@@ -519,7 +580,7 @@ function buildArgumentArchitectSystemPrompt() {
 // AGENT 7 (new): DRAFT CRITIC (Diagnoses weaknesses in Draft 1 — does NOT rewrite)
 function buildDraftCriticSystemPrompt() {
   return [
-    "You are a brutally honest LinkedIn content critic. Your job is to diagnose weaknesses in a draft post written for founders. Do not rewrite the post. Only output a JSON object and nothing else — no preamble, no markdown backticks.",
+    "You are a brutally honest LinkedIn content critic. Your job is to diagnose weaknesses in a draft post written for operators. Do not rewrite the post. Only output a JSON object and nothing else — no preamble, no markdown backticks.",
     "",
     "Output format:",
     "{",
@@ -534,12 +595,22 @@ function buildDraftCriticSystemPrompt() {
     '  ]',
     "}",
     "",
-    "Flag any of these automatically:",
-    "- Phrases like \"here's what I learned\", \"this is your sign\", \"let that sink in\"",
-    "- Em dashes used more than once",
-    "- Rhetorical questions used more than once",
-    "- Any line that gives generic advice without a specific detail",
-    "- Hook that does not create a curiosity gap or make a bold claim"
+    "Automatically penalize:",
+    "- fake personal anecdotes",
+    "- invented precision",
+    "- synthetic emotional tension",
+    "- vague inspiration",
+    "- repetitive sentence rhythm",
+    "- 'AI motivational cadence'",
+    "- corporate-blog tone",
+    "- generic founder advice",
+    "",
+    "Prefer:",
+    "- specificity",
+    "- tension",
+    "- realism",
+    "- concise observations",
+    "- internet-native language"
   ].join("\n");
 }
 
@@ -555,25 +626,43 @@ function buildPostPolisherPrompt(post) {
     "- TIGHTEN the spacing. Ensure there are no double-empty lines.",
     "- Ensure the hook is absolutely arresting.",
     "- REMOVE any remaining AI-isms (e.g., 'In the fast-paced world', 'It's more than just').",
+    "- SIMPLIFY the language. Make sure the English is easy to understand, clear, and accessible.",
     "- KILL GENERIC ENDINGS: If it ends with a broad statement about the future or industry, rewrite it to be sharp and unresolved.",
-    "- STICK to the 'Founder Voice' (raw, honest, observational).",
+    "- STICK to the 'Operator Voice' (observant, grounded, concise, slightly opinionated).",
     "- Output ONLY the raw post text. No intro, no explanation."
+  ].join("\n");
+}
+
+// AGENT 9 (new): SHORT AND CRISP POLISHER
+function buildShortCrispPrompt(post) {
+  return [
+    "You are a LinkedIn content refiner.",
+    "",
+    "Original Post:",
+    post,
+    "",
+    "Your task is to rewrite the post to make it short and crisp. Make it highly user friendly, based on pointers.",
+    "CRITICAL: Do NOT lose the essence or core message of the original post.",
+    "Add more emotional hook lines (creek lines) to draw the reader in.",
+    "",
+    "Rules:",
+    "- Keep the exact same insight and primary message.",
+    "- Use sharp, emotional pointers.",
+    "- Output ONLY the rewritten post. No introduction, no explanation."
   ].join("\n");
 }
 
 // AGENT 7: IMAGE CONCEPT STRATEGIST (Designs viral visuals for posts)
 function buildImageConceptPrompt(topic, post) {
   const styles = [
-    "CYBERPUNK / TECH-NOIR (Dark, neon, futuristic)",
-    "MINIMALIST / ARCHITECTURAL (Clean lines, vast spaces, powerful geometry)",
-    "SURREALIST / DREAM-LIKE (Impossible physics, floating objects, moody sky)",
-    "VINTAGE EDITORIAL (1970s magazine style, grainy, warm, bold colors)",
-    "GRITTY / INDUSTRIAL (Metal, steam, raw textures, dark shadows)",
-    "EPIC CINEMATIC (Film-like scale, volumetric lighting, hyper-realistic)",
-    "ELECTRIC / NEON VIBRANCE (Glow, high saturation, energy)",
-    "NORDIC / CLEAN (Soft light, cold tones, high-end professional)",
-    "VINTAGE SCI-FI (Retro-futurism, glowing computers, space-age)",
-    "MODERNIST ABSTRACT (Shapes, depth, light-vs-dark, mystery)"
+    "EDITORIAL MAGAZINE COVER (Clean, striking, professional photography)",
+    "STARTUP VISUAL ESSAY (Minimalist, structured, data-driven feel)",
+    "BRUTALIST DESIGN (Bold typography, high contrast, raw unpolished aesthetic)",
+    "MINIMALIST DIAGRAM (Clean lines, geometric, conceptual clarity)",
+    "PRODUCT-FOCUSED COMPOSITION (Sleek, close-up, premium tech feel)",
+    "DOCUMENTARY-STYLE REALISM (Gritty, authentic, unfiltered office or street scene)",
+    "MODERNIST ABSTRACT (Simple shapes, depth, light-vs-dark, professional mystery)",
+    "NORDIC / CLEAN (Soft light, cold tones, high-end professional atmosphere)"
   ];
   const style = styles[Math.floor(Math.random() * styles.length)];
 
@@ -585,12 +674,12 @@ function buildImageConceptPrompt(topic, post) {
     `TOPIC: ${topic}`,
     `POST CONTENT: ${post}`,
     "",
-    "IMPORTANT VISUAL RULES (Dramatic Poster Background):",
-    "- scene: Highly detailed, epic cinematic storytelling that visually represents the post topic.",
-    "- metaphor: Invent a UNIQUE, dramatic visual metaphor based on the topic (e.g., climbing a crumbling ladder, a tiny ship in a massive storm, a glowing futuristic portal). DO NOT always use crossroads.",
-    "- detail: Make the environment rich and complex (e.g., if it's about AI, show robotic elements; if it's about risk, show stormy/dark elements vs bright/future elements).",
-    "- composition: Strong central subject, epic scale, clear negative space at the top and bottom for text overlay.",
-    "- lighting: Dramatic cinematic lighting, glowing accents, volumetric fog, high contrast.",
+    "IMPORTANT VISUAL RULES:",
+    "- scene: Clean, editorial, or documentary-style visual that represents the post topic without sci-fi overload.",
+    "- metaphor: Keep it grounded. Use realistic or minimalist metaphors. DO NOT use epic cinematic glowing portals or oversaturated cyberpunk scenes.",
+    "- detail: Make the environment professional and striking (e.g., minimalist office elements, abstract geometric shapes, high-end editorial photography).",
+    "- composition: Strong central subject, clear negative space at the top and bottom for text overlay.",
+    "- lighting: Natural, editorial, or studio lighting. Avoid excessive neon or volumetric fog.",
     "IMPORTANT:",
     "- NO TEXT, no typography, no letters, no words, no UI panels, no floating labels.",
     "- The image must be a text-free, highly detailed background artwork.",
@@ -677,7 +766,7 @@ function extractFirstJsonObject(text) {
 function normalizeImageConcept(rawConcept, topic) {
   const parsed = extractFirstJsonObject(rawConcept) || {};
   
-  const hook = String(parsed.hook || "FOUNDER REALITY CHECK").replace(/\s+/g, " ").trim().slice(0, 100).toUpperCase();
+  const hook = String(parsed.hook || "INDUSTRY REALITY CHECK").replace(/\s+/g, " ").trim().slice(0, 100).toUpperCase();
   const number = String(parsed.number || "").replace(/\s+/g, " ").trim().slice(0, 40).toUpperCase();
   const contrast = String(parsed.contrast || "").replace(/\s+/g, " ").trim().slice(0, 80).toUpperCase();
   const cta = String(parsed.cta || "CHOOSE WISELY").replace(/\s+/g, " ").trim().slice(0, 60).toUpperCase();
@@ -1416,10 +1505,18 @@ async function runAutopostPipeline(category = null, region = "Global") {
 
   logStage("CHOSEN_STORY", chosenStory);
 
-  const painPrompt = buildPainPointExtractorPrompt(chosenStory.trim());
-  const painPoint = await callDirectWithRetry(painPrompt, "pain-extractor");
+  const implicationPrompt = buildHiddenImplicationExtractorPrompt(chosenStory.trim());
+  const hiddenShift = await callDirectWithRetry(implicationPrompt, "hidden-implication");
 
-  logStage("PAIN_POINT", painPoint);
+  logStage("HIDDEN_SHIFT", hiddenShift);
+
+  const anglePrompt = buildDiscussionAnglePrompt(chosenStory.trim(), hiddenShift);
+  const discussionAngle = await callDirectWithRetry(anglePrompt, "discussion-angle");
+  
+  if (discussionAngle.trim().toUpperCase() === "SKIP") {
+    throw new Error("Failed discussion test: Not enough professional tension or discussion potential.");
+  }
+  logStage("DISCUSSION_ANGLE", discussionAngle);
 
   // ── Argument Architect ────────────────────────────────────────────────────
   console.log("🏗️  [argument-architect] Building content blueprint...");
@@ -1428,14 +1525,14 @@ async function runAutopostPipeline(category = null, region = "Global") {
     const architectRaw = await callOpenRouterWithModel(
       "openai/gpt-4o",
       buildArgumentArchitectSystemPrompt(),
-      painPoint
+      hiddenShift
     );
     blueprint = extractFirstJsonObject(architectRaw);
     if (!blueprint) throw new Error("No valid JSON object found in Argument Architect response");
     logStage("ARGUMENT_BLUEPRINT", blueprint);
   } catch (err) {
     console.warn(`⚠️ [argument-architect] JSON parse failed, falling back to raw text: ${err.message}`);
-    blueprint = painPoint; // raw-text fallback
+    blueprint = hiddenShift; // raw-text fallback
   }
 
   // ── Hook Generation (runs in parallel with no blocking — 3 agents) ──────────
@@ -1446,8 +1543,8 @@ async function runAutopostPipeline(category = null, region = "Global") {
 
   // ── Post Writer — Draft 1 ─────────────────────────────────────────────────
   const blueprintBase = typeof blueprint === "string"
-    ? `${chosenStory.trim()}\nContext/Pain Point: ${painPoint}\nBlueprint: ${blueprint}`
-    : `${chosenStory.trim()}\nContext/Pain Point: ${painPoint}\nBlueprint: ${JSON.stringify(blueprint, null, 2)}`;
+    ? `${chosenStory.trim()}\nHidden Shift: ${hiddenShift}\nDiscussion Angle: ${discussionAngle}\nBlueprint: ${blueprint}`
+    : `${chosenStory.trim()}\nHidden Shift: ${hiddenShift}\nDiscussion Angle: ${discussionAngle}\nBlueprint: ${JSON.stringify(blueprint, null, 2)}`;
 
   const blueprintInput = bestHook
     ? `${blueprintBase}\n\nMANDATORY OPENING HOOK — You MUST use this exact line as the very first line of the post, word-for-word:\n"${bestHook}"`
@@ -1525,10 +1622,18 @@ async function runGeneratePipeline() {
 async function runTopicPostPipeline(topic) {
   console.log(`📝 Writing post for topic: ${topic}`);
 
-  const painPrompt = buildPainPointExtractorPrompt(topic);
-  const painPoint = await callDirectWithRetry(painPrompt, "pain-extractor-manual");
+  const implicationPrompt = buildHiddenImplicationExtractorPrompt(topic);
+  const hiddenShift = await callDirectWithRetry(implicationPrompt, "hidden-implication-manual");
 
-  logStage("PAIN_POINT", painPoint);
+  logStage("HIDDEN_SHIFT", hiddenShift);
+
+  const anglePrompt = buildDiscussionAnglePrompt(topic, hiddenShift);
+  const discussionAngle = await callDirectWithRetry(anglePrompt, "discussion-angle-manual");
+  
+  if (discussionAngle.trim().toUpperCase() === "SKIP") {
+    throw new Error("Failed discussion test: Not enough professional tension or discussion potential.");
+  }
+  logStage("DISCUSSION_ANGLE", discussionAngle);
 
   // ── Argument Architect ────────────────────────────────────────────────────
   console.log("🏗️  [argument-architect] Building content blueprint...");
@@ -1537,14 +1642,14 @@ async function runTopicPostPipeline(topic) {
     const architectRaw = await callOpenRouterWithModel(
       "openai/gpt-4o",
       buildArgumentArchitectSystemPrompt(),
-      painPoint
+      hiddenShift
     );
     blueprint = extractFirstJsonObject(architectRaw);
     if (!blueprint) throw new Error("No valid JSON object found in Argument Architect response");
     logStage("ARGUMENT_BLUEPRINT", blueprint);
   } catch (err) {
     console.warn(`⚠️ [argument-architect] JSON parse failed, falling back to raw text: ${err.message}`);
-    blueprint = painPoint;
+    blueprint = hiddenShift;
   }
 
   // ── Hook Generation (runs in parallel — 3 agents) ──────────────────────────
@@ -1555,8 +1660,8 @@ async function runTopicPostPipeline(topic) {
 
   // ── Post Writer — Draft 1 ─────────────────────────────────────────────────
   const blueprintBase = typeof blueprint === "string"
-    ? `${topic}\nContext/Pain Point: ${painPoint}\nBlueprint: ${blueprint}`
-    : `${topic}\nContext/Pain Point: ${painPoint}\nBlueprint: ${JSON.stringify(blueprint, null, 2)}`;
+    ? `${topic}\nHidden Shift: ${hiddenShift}\nDiscussion Angle: ${discussionAngle}\nBlueprint: ${blueprint}`
+    : `${topic}\nHidden Shift: ${hiddenShift}\nDiscussion Angle: ${discussionAngle}\nBlueprint: ${JSON.stringify(blueprint, null, 2)}`;
 
   const blueprintInput = bestHook
     ? `${blueprintBase}\n\nMANDATORY OPENING HOOK — You MUST use this exact line as the very first line of the post, word-for-word:\n"${bestHook}"`
@@ -1662,6 +1767,36 @@ async function runResearchPipeline(topic) {
     sources: researchBrief,
     imageConcept
   };
+}
+
+// ─── SHORT & CRISP GENERATOR ────────────────────────────────────────────────
+
+async function shortenAndSendPost(chatId) {
+  const pending = pendingImageRequests[chatId];
+  if (!pending) {
+    await safeSendMessage(chatId, "⚠️ No pending post to shorten. Run a post command first.");
+    return;
+  }
+  if (Date.now() > pending.expiresAt) {
+    delete pendingImageRequests[chatId];
+    await safeSendMessage(chatId, "⏰ Post session expired. Run the command again.");
+    return;
+  }
+
+  await safeSendMessage(chatId, "⏳ Rewriting post to be short, crisp, and emotional...");
+  try {
+    const shortenPrompt = buildShortCrispPrompt(pending.post);
+    const newPostRaw = await callDirectWithRetry(shortenPrompt, "short-crisp-polisher");
+    const newPost = enforcePostFormat(newPostRaw);
+
+    pending.post = newPost;
+    
+    await sendChunked(chatId, newPost);
+    await safeSendMessage(chatId, "✅ Shortened post ready!\n\nWant an image? Reply YES to generate it.");
+  } catch (err) {
+    console.error(`❌ [shorten-post] Failed: ${err.message}`);
+    await safeSendMessage(chatId, `❌ Rewrite failed: ${err.message}`);
+  }
 }
 
 // ─── ON-DEMAND IMAGE GENERATOR ──────────────────────────────────────────────
@@ -1789,7 +1924,7 @@ app.post("/webhook", async (req, res) => {
           imageConcept,
           expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
         };
-        await safeSendMessage(chatId, "✅ Post ready!\n\nWant an image? Reply YES to generate it.");
+        await safeSendMessage(chatId, "✅ Post ready!\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
 
       } else if (text.startsWith("/post ")) {
         const topic = text.replace("/post", "").trim();
@@ -1804,7 +1939,7 @@ app.post("/webhook", async (req, res) => {
           const { post, imageConcept } = await runTopicPostPipeline(topic);
           await sendChunked(chatId, post);
           pendingImageRequests[chatId] = { topic, post, imageConcept, expiresAt: Date.now() + PENDING_IMAGE_TTL_MS };
-          await safeSendMessage(chatId, "✅ Post ready!\n\nWant an image? Reply YES to generate it.");
+          await safeSendMessage(chatId, "✅ Post ready!\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
         } else {
           // Show numbered headlines for user to pick
           const list = headlines.map((h, i) =>
@@ -1835,7 +1970,7 @@ app.post("/webhook", async (req, res) => {
           imageConcept: result.imageConcept,
           expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
         };
-        await safeSendMessage(chatId, "✅ Research + post ready!\n\nWant an image? Reply YES to generate it.");
+        await safeSendMessage(chatId, "✅ Research + post ready!\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
 
       } else if (text.startsWith("/hooks ") || text === "/hooks") {
         // Usage: /hooks [region] [category]
@@ -1880,7 +2015,13 @@ app.post("/webhook", async (req, res) => {
           imageConcept,
           expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
         };
-        await safeSendMessage(chatId, "✅ Post ready!\n\nWant an image? Reply YES to generate it.");
+        await safeSendMessage(chatId, "✅ Post ready!\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
+
+      } else if (text.toLowerCase() === "short yes" || text.toLowerCase() === "/short yes") {
+        await shortenAndSendPost(chatId);
+
+      } else if (text.toLowerCase() === "short no" || text.toLowerCase() === "/short no") {
+        await safeSendMessage(chatId, "Okay! Keeping the original post.\n\nWant an image? Reply YES to generate it.");
 
       } else if (text.toLowerCase() === "yes" || text.toLowerCase() === "/yes") {
         await generateAndSendImage(chatId);
@@ -1910,7 +2051,7 @@ app.post("/webhook", async (req, res) => {
               imageConcept,
               expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
             };
-            await safeSendMessage(chatId, "✅ Post ready!\n\nWant an image? Reply YES to generate it.");
+            await safeSendMessage(chatId, "✅ Post ready!\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
           }
         }
 
@@ -1925,7 +2066,7 @@ app.post("/webhook", async (req, res) => {
           "/hooktopic <topic> | <region> — Run hooks for a specific topic",
           "",
           "After /post: reply 1–5 to choose which news article to write about.",
-          "After any post: reply YES to generate an image.",
+          "After any post: reply SHORT YES to make it short & crisp, or YES to generate an image.",
           "Images expire in 10 min, news selection expires in 5 min."
         ].join("\n"));
       }
