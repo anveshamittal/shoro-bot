@@ -109,46 +109,46 @@ const CATEGORY_SUBREDDITS = {
 
 const REGION_SUBREDDITS = {
   India: {
-    startup:         ["indianstartups", "india_business", "StartupIndia", "entrepreneur", "indiehackers"],
-    edtech:          ["IndianAcademia", "jee", "UPSC", "india", "edtech"],
-    ai:              ["india", "artificial", "MachineLearning", "ChatGPT", "LocalLLaMA"],
-    healthcare:      ["india", "healthtech", "medicine", "Ayurveda"],
-    fintech:         ["IndiaInvestments", "IndianStreetBets", "personalfinance", "india", "fintech"],
-    marketing:       ["digitalmarketing", "india", "marketing", "socialmedia"],
-    news_general:    ["india", "IndiaSpeaks", "worldnews", "indianews"],
+    startup: ["indianstartups", "india_business", "StartupIndia", "entrepreneur", "indiehackers"],
+    edtech: ["IndianAcademia", "jee", "UPSC", "india", "edtech"],
+    ai: ["india", "artificial", "MachineLearning", "ChatGPT", "LocalLLaMA"],
+    healthcare: ["india", "healthtech", "medicine", "Ayurveda"],
+    fintech: ["IndiaInvestments", "IndianStreetBets", "personalfinance", "india", "fintech"],
+    marketing: ["digitalmarketing", "india", "marketing", "socialmedia"],
+    news_general: ["india", "IndiaSpeaks", "worldnews", "indianews"],
     current_affairs: ["india", "IndiaSpeaks", "geopolitics", "worldpolitics"],
-    controversy:     ["india", "IndiaSpeaks", "unpopularopinion", "TrueOffMyChest"],
+    controversy: ["india", "IndiaSpeaks", "unpopularopinion", "TrueOffMyChest"],
     personal_growth: ["india", "getdisciplined", "selfimprovement", "indianstartups"],
-    humor:           ["desimemes", "IndianPeopleFacebook", "india", "dankinindia"],
-    dmv_edtech:      ["jee", "UPSC", "IndianAcademia", "india"],
+    humor: ["desimemes", "IndianPeopleFacebook", "india", "dankinindia"],
+    dmv_edtech: ["jee", "UPSC", "IndianAcademia", "india"],
   },
   Canada: {
-    startup:         ["canadabusiness", "canadiantech", "startups", "entrepreneur", "waterloo"],
-    edtech:          ["canada", "CanadaEducation", "learnprogramming", "edtech"],
-    ai:              ["canada", "artificial", "MachineLearning", "ChatGPT"],
-    healthcare:      ["CanadaHealthcare", "canada", "healthtech", "medicine"],
-    fintech:         ["PersonalFinanceCanada", "CanadaInvesting", "canada", "fintech"],
-    marketing:       ["canada", "marketing", "digitalmarketing", "socialmedia"],
-    news_general:    ["canada", "canadanews", "worldnews", "onguardforthee"],
+    startup: ["canadabusiness", "canadiantech", "startups", "entrepreneur", "waterloo"],
+    edtech: ["canada", "CanadaEducation", "learnprogramming", "edtech"],
+    ai: ["canada", "artificial", "MachineLearning", "ChatGPT"],
+    healthcare: ["CanadaHealthcare", "canada", "healthtech", "medicine"],
+    fintech: ["PersonalFinanceCanada", "CanadaInvesting", "canada", "fintech"],
+    marketing: ["canada", "marketing", "digitalmarketing", "socialmedia"],
+    news_general: ["canada", "canadanews", "worldnews", "onguardforthee"],
     current_affairs: ["canada", "CanadaPolitics", "geopolitics", "onguardforthee"],
-    controversy:     ["canada", "onguardforthee", "unpopularopinion", "changemyview"],
+    controversy: ["canada", "onguardforthee", "unpopularopinion", "changemyview"],
     personal_growth: ["canada", "getdisciplined", "selfimprovement", "productivity"],
-    humor:           ["canada", "CanadaHumour", "funny", "Damnthatsinteresting"],
-    dmv_edtech:      ["canada", "CanadaEducation", "learnprogramming", "driving"],
+    humor: ["canada", "CanadaHumour", "funny", "Damnthatsinteresting"],
+    dmv_edtech: ["canada", "CanadaEducation", "learnprogramming", "driving"],
   },
   US: {
-    startup:         ["startups", "entrepreneur", "ycombinator", "SaaS", "indiehackers", "soloentrepreneur"],
-    edtech:          ["edtech", "highereducation", "Teachers", "education", "learnprogramming"],
-    ai:              ["artificial", "MachineLearning", "OpenAI", "ChatGPT", "LocalLLaMA", "singularity"],
-    healthcare:      ["healthtech", "medicine", "nursing", "healthcare", "digitalhealth"],
-    fintech:         ["fintech", "personalfinance", "wallstreetbets", "stocks", "investing", "banking"],
-    marketing:       ["marketing", "socialmedia", "advertising", "copywriting", "digitalmarketing"],
-    news_general:    ["news", "worldnews", "USnews", "politics", "nottheonion"],
+    startup: ["startups", "entrepreneur", "ycombinator", "SaaS", "indiehackers", "soloentrepreneur"],
+    edtech: ["edtech", "highereducation", "Teachers", "education", "learnprogramming"],
+    ai: ["artificial", "MachineLearning", "OpenAI", "ChatGPT", "LocalLLaMA", "singularity"],
+    healthcare: ["healthtech", "medicine", "nursing", "healthcare", "digitalhealth"],
+    fintech: ["fintech", "personalfinance", "wallstreetbets", "stocks", "investing", "banking"],
+    marketing: ["marketing", "socialmedia", "advertising", "copywriting", "digitalmarketing"],
+    news_general: ["news", "worldnews", "USnews", "politics", "nottheonion"],
     current_affairs: ["politics", "geopolitics", "worldpolitics", "economics", "neutralnews"],
-    controversy:     ["unpopularopinion", "changemyview", "AmItheAsshole", "TrueOffMyChest"],
+    controversy: ["unpopularopinion", "changemyview", "AmItheAsshole", "TrueOffMyChest"],
     personal_growth: ["getdisciplined", "selfimprovement", "decidingtobebetter", "productivity"],
-    humor:           ["funny", "Damnthatsinteresting", "mildlyinteresting", "nottheonion"],
-    dmv_edtech:      ["DMV", "driving", "learnprogramming", "edtech", "highereducation"],
+    humor: ["funny", "Damnthatsinteresting", "mildlyinteresting", "nottheonion"],
+    dmv_edtech: ["DMV", "driving", "learnprogramming", "edtech", "highereducation"],
   },
   Global: null, // null = use existing CATEGORY_SUBREDDITS (default behavior)
 };
@@ -765,7 +765,7 @@ function extractFirstJsonObject(text) {
 
 function normalizeImageConcept(rawConcept, topic) {
   const parsed = extractFirstJsonObject(rawConcept) || {};
-  
+
   const hook = String(parsed.hook || "INDUSTRY REALITY CHECK").replace(/\s+/g, " ").trim().slice(0, 100).toUpperCase();
   const number = String(parsed.number || "").replace(/\s+/g, " ").trim().slice(0, 40).toUpperCase();
   const contrast = String(parsed.contrast || "").replace(/\s+/g, " ").trim().slice(0, 80).toUpperCase();
@@ -846,7 +846,7 @@ async function renderImageWithText(backgroundImageUrl, imageConcept) {
   const headlineScale = [0.055, 0.06, 0.065];
   const scale = headlineScale[Math.floor(Math.random() * headlineScale.length)];
 
-  const hookSize = Math.round(width * (scale * 1.2)); 
+  const hookSize = Math.round(width * (scale * 1.2));
   const numberSize = Math.round(width * (scale * 2.2));
   const contrastSize = Math.round(width * (scale * 0.9));
   const ctaSize = Math.round(width * (scale * 0.75));
@@ -866,7 +866,7 @@ async function renderImageWithText(backgroundImageUrl, imageConcept) {
 
   const hookBuf = await createTextBuffer(imageConcept.hook, hookSize, textColor, false);
   const hookShadow = await createTextBuffer(imageConcept.hook, hookSize, textColor, true);
-  
+
   const numberBuf = await createTextBuffer(imageConcept.number, numberSize, highlightColor, false);
   const numberShadow = await createTextBuffer(imageConcept.number, numberSize, highlightColor, true);
 
@@ -882,7 +882,7 @@ async function renderImageWithText(backgroundImageUrl, imageConcept) {
   const ctaMeta = ctaBuf ? await sharp(ctaBuf).metadata() : { height: 0, width: 0 };
 
   const gap = Math.round(height * 0.015);
-  
+
   // Calculate total block height
   let totalHeight = 0;
   if (hookBuf) totalHeight += hookMeta.height + gap;
@@ -894,7 +894,7 @@ async function renderImageWithText(backgroundImageUrl, imageConcept) {
   // 3. RANDOM POSITION LOGIC (top, center, bottom)
   const positions = ["bottom", "center", "top"];
   const position = positions[Math.floor(Math.random() * positions.length)];
-  
+
   const paddingY = Math.round(height * 0.08);
 
   let startY;
@@ -907,7 +907,7 @@ async function renderImageWithText(backgroundImageUrl, imageConcept) {
   }
 
   const composites = [];
-  
+
   let gradientSvg = "";
   if (position === "bottom") {
     gradientSvg = `
@@ -942,7 +942,7 @@ async function renderImageWithText(backgroundImageUrl, imageConcept) {
 
   let currentY = startY;
   const elements = [];
-  
+
   if (hookBuf) {
     elements.push({ buf: hookBuf, shadow: hookShadow, y: currentY, meta: hookMeta });
     currentY += hookMeta.height + gap;
@@ -1103,7 +1103,7 @@ async function fetchRSSFeed(url) {
 
     // Extract <title> tags from RSS items — works for RSS 2.0 and Atom
     const itemMatches = xml.match(/<item[\s\S]*?<\/item>/gi) ||
-                        xml.match(/<entry[\s\S]*?<\/entry>/gi) || [];
+      xml.match(/<entry[\s\S]*?<\/entry>/gi) || [];
 
     const titles = itemMatches
       .map(item => {
@@ -1228,7 +1228,7 @@ async function fetchTopicHeadlines(topic) {
 function isTransient(err) {
   const msg = (err?.message || String(err)).toLowerCase();
   const code = (err?.code || "").toLowerCase();
-  
+
   const keywords = [
     "503",
     "no healthy upstream",
@@ -1250,7 +1250,7 @@ function isTransient(err) {
     "rate limit",
     "too many requests",
   ];
-  
+
   return keywords.some(k => msg.includes(k) || code.includes(k));
 }
 
@@ -1325,7 +1325,7 @@ async function callDirectWithRetry(prompt, logName) {
     } catch (e) {
       const msg = e.response?.data?.error?.message || e.message;
       console.warn(`⚠️ [${logName}] OpenRouter request failed: ${msg} (Code: ${e.code || "N/A"})`);
-      
+
       if (isTransient(e)) {
         attempt++;
       } else {
@@ -1377,7 +1377,7 @@ function getAIResponse(prompt, sessionId) {
     const child = spawn("node", args, {
       windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
-      shell: false, 
+      shell: false,
       env: { ...process.env, OPENCLAW_LOG_LEVEL: "info" }
     });
 
@@ -1386,7 +1386,7 @@ function getAIResponse(prompt, sessionId) {
     const timer = setTimeout(() => {
       try { child.kill("SIGKILL"); } catch (_) { }
       reject(new Error("OpenClaw timed out after 300s"));
-    }, 300000); 
+    }, 300000);
 
     child.stdout.on("data", (d) => { stdout += d.toString(); });
     child.stderr.on("data", (d) => { stderr += d.toString(); });
@@ -1454,10 +1454,10 @@ function looksLikeClarification(text) {
 
 function enforcePostFormat(raw) {
   if (!raw) return raw;
-  
+
   // Collapse excessive spacing (3+ newlines into 2)
   let processed = raw.replace(/\n{3,}/g, "\n\n").trim();
-  
+
   const lines = processed.split("\n");
   let startIdx = 0;
   for (let i = 0; i < Math.min(lines.length, 3); i++) {
@@ -1485,130 +1485,130 @@ async function runAutopostPipeline(category = null, region = "Global") {
   isPipelineRunning = true;
   try {
     console.log(`🔍 Fetching live signals for autopost (Category: ${category || DEFAULT_CATEGORY}, Region: ${region})...`);
-  const { data: rawSignals, source } = await fetchLiveSignals(category, region);
+    const { data: rawSignals, source } = await fetchLiveSignals(category, region);
 
-  if (!rawSignals) {
-    throw new Error("All live signal sources failed. Cannot run autopost without real data.");
-  }
+    if (!rawSignals) {
+      throw new Error("All live signal sources failed. Cannot run autopost without real data.");
+    }
 
-  const cleanerPrompt = buildSignalCleanerPrompt(rawSignals);
-  const signals = await callDirectWithRetry(cleanerPrompt, "signal-cleaner");
-  
-  logStage("LIVE_SIGNALS", signals);
+    const cleanerPrompt = buildSignalCleanerPrompt(rawSignals);
+    const signals = await callDirectWithRetry(cleanerPrompt, "signal-cleaner");
 
-  const pickerPrompt = buildStoryPickerPrompt(signals, source, recentTopics, category, region);
-  const chosenStory = await callDirectWithRetry(pickerPrompt, "story-picker");
+    logStage("LIVE_SIGNALS", signals);
 
-  if (!chosenStory?.trim() || chosenStory.trim().toUpperCase() === "SKIP") {
-    throw new Error(`No qualifying ${category || DEFAULT_CATEGORY} story found in this week's signals.`);
-  }
+    const pickerPrompt = buildStoryPickerPrompt(signals, source, recentTopics, category, region);
+    const chosenStory = await callDirectWithRetry(pickerPrompt, "story-picker");
 
-  logStage("CHOSEN_STORY", chosenStory);
+    if (!chosenStory?.trim() || chosenStory.trim().toUpperCase() === "SKIP") {
+      throw new Error(`No qualifying ${category || DEFAULT_CATEGORY} story found in this week's signals.`);
+    }
 
-  const implicationPrompt = buildHiddenImplicationExtractorPrompt(chosenStory.trim());
-  const hiddenShift = await callDirectWithRetry(implicationPrompt, "hidden-implication");
+    logStage("CHOSEN_STORY", chosenStory);
 
-  logStage("HIDDEN_SHIFT", hiddenShift);
+    const implicationPrompt = buildHiddenImplicationExtractorPrompt(chosenStory.trim());
+    const hiddenShift = await callDirectWithRetry(implicationPrompt, "hidden-implication");
 
-  const anglePrompt = buildDiscussionAnglePrompt(chosenStory.trim(), hiddenShift);
-  const discussionAngle = await callDirectWithRetry(anglePrompt, "discussion-angle");
-  
-  if (discussionAngle.trim().toUpperCase() === "SKIP") {
-    throw new Error("Failed discussion test: Not enough professional tension or discussion potential.");
-  }
-  logStage("DISCUSSION_ANGLE", discussionAngle);
+    logStage("HIDDEN_SHIFT", hiddenShift);
 
-  // ── Argument Architect ────────────────────────────────────────────────────
-  console.log("🏗️  [argument-architect] Building content blueprint...");
-  let blueprint;
-  try {
-    const architectRaw = await callOpenRouterWithModel(
-      "openai/gpt-4o",
-      buildArgumentArchitectSystemPrompt(),
-      hiddenShift
-    );
-    blueprint = extractFirstJsonObject(architectRaw);
-    if (!blueprint) throw new Error("No valid JSON object found in Argument Architect response");
-    logStage("ARGUMENT_BLUEPRINT", blueprint);
-  } catch (err) {
-    console.warn(`⚠️ [argument-architect] JSON parse failed, falling back to raw text: ${err.message}`);
-    blueprint = hiddenShift; // raw-text fallback
-  }
+    const anglePrompt = buildDiscussionAnglePrompt(chosenStory.trim(), hiddenShift);
+    const discussionAngle = await callDirectWithRetry(anglePrompt, "discussion-angle");
 
-  // ── Hook Generation (runs in parallel with no blocking — 3 agents) ──────────
-  console.log("🪝 [hook-gen] Generating viral hook candidates...");
-  const hookCandidates = await runHookGenerationForPost(chosenStory.trim(), region);
-  const bestHook = await pickBestHookForPost(hookCandidates, chosenStory.trim());
-  if (bestHook) logStage("BEST_HOOK", bestHook);
+    if (discussionAngle.trim().toUpperCase() === "SKIP") {
+      throw new Error("Failed discussion test: Not enough professional tension or discussion potential.");
+    }
+    logStage("DISCUSSION_ANGLE", discussionAngle);
 
-  // ── Post Writer — Draft 1 ─────────────────────────────────────────────────
-  const blueprintBase = typeof blueprint === "string"
-    ? `${chosenStory.trim()}\nHidden Shift: ${hiddenShift}\nDiscussion Angle: ${discussionAngle}\nBlueprint: ${blueprint}`
-    : `${chosenStory.trim()}\nHidden Shift: ${hiddenShift}\nDiscussion Angle: ${discussionAngle}\nBlueprint: ${JSON.stringify(blueprint, null, 2)}`;
+    // ── Argument Architect ────────────────────────────────────────────────────
+    console.log("🏗️  [argument-architect] Building content blueprint...");
+    let blueprint;
+    try {
+      const architectRaw = await callOpenRouterWithModel(
+        "openai/gpt-4o",
+        buildArgumentArchitectSystemPrompt(),
+        hiddenShift
+      );
+      blueprint = extractFirstJsonObject(architectRaw);
+      if (!blueprint) throw new Error("No valid JSON object found in Argument Architect response");
+      logStage("ARGUMENT_BLUEPRINT", blueprint);
+    } catch (err) {
+      console.warn(`⚠️ [argument-architect] JSON parse failed, falling back to raw text: ${err.message}`);
+      blueprint = hiddenShift; // raw-text fallback
+    }
 
-  const blueprintInput = bestHook
-    ? `${blueprintBase}\n\nMANDATORY OPENING HOOK — You MUST use this exact line as the very first line of the post, word-for-word:\n"${bestHook}"`
-    : blueprintBase;
+    // ── Hook Generation (runs in parallel with no blocking — 3 agents) ──────────
+    console.log("🪝 [hook-gen] Generating viral hook candidates...");
+    const hookCandidates = await runHookGenerationForPost(chosenStory.trim(), region);
+    const bestHook = await pickBestHookForPost(hookCandidates, chosenStory.trim());
+    if (bestHook) logStage("BEST_HOOK", bestHook);
 
-  const writerPrompt = buildPostWriterPrompt(blueprintInput);
-  let draft1 = await callDirectWithRetry(writerPrompt, "post-writer-draft1");
-  draft1 = enforcePostFormat(draft1);
-  logStage("DRAFT_1", draft1);
+    // ── Post Writer — Draft 1 ─────────────────────────────────────────────────
+    const blueprintBase = typeof blueprint === "string"
+      ? `${chosenStory.trim()}\nHidden Shift: ${hiddenShift}\nDiscussion Angle: ${discussionAngle}\nBlueprint: ${blueprint}`
+      : `${chosenStory.trim()}\nHidden Shift: ${hiddenShift}\nDiscussion Angle: ${discussionAngle}\nBlueprint: ${JSON.stringify(blueprint, null, 2)}`;
 
-  // ── Draft Critic ──────────────────────────────────────────────────────────
-  console.log("🔍 [draft-critic] Analysing Draft 1...");
-  let critiqueJson;
-  try {
-    const critiqueRaw = await callOpenRouterWithModel(
-      "anthropic/claude-3.7-sonnet",
-      buildDraftCriticSystemPrompt(),
-      draft1
-    );
-    critiqueJson = extractFirstJsonObject(critiqueRaw);
-    if (!critiqueJson) throw new Error("No valid JSON object found in Draft Critic response");
-    logStage("DRAFT_CRITIQUE", critiqueJson);
-  } catch (err) {
-    console.warn(`⚠️ [draft-critic] JSON parse failed, falling back to raw text: ${err.message}`);
-    critiqueJson = null;
-  }
+    const blueprintInput = bestHook
+      ? `${blueprintBase}\n\nMANDATORY OPENING HOOK — You MUST use this exact line as the very first line of the post, word-for-word:\n"${bestHook}"`
+      : blueprintBase;
 
-  // ── Post Writer — Draft 2 ─────────────────────────────────────────────────
-  const postWriterSystemPrompt = buildPostWriterPrompt("").split("\n").slice(0, 3).join("\n"); // system context hint
-  const draft2UserPrompt = [
-    "You are rewriting a LinkedIn post based on a critique.",
-    "",
-    "Here is the original draft:",
-    draft1,
-    "",
-    "Here is the critique:",
-    critiqueJson ? JSON.stringify(critiqueJson, null, 2) : "(No structured critique available — improve the hook, remove generic phrases, and tighten the ending.)",
-    "",
-    "Rewrite the post by fixing every issue listed in rewrite_instructions. Rules:",
-    "- Keep the same core idea and insight",
-    "- Do not change the fundamental angle",
-    "- Fix the hook first",
-    "- Replace every flagged generic phrase with a specific detail",
-    "- Do not add any new generic advice",
-    "- Output only the rewritten post, no explanation"
-  ].join("\n");
+    const writerPrompt = buildPostWriterPrompt(blueprintInput);
+    let draft1 = await callDirectWithRetry(writerPrompt, "post-writer-draft1");
+    draft1 = enforcePostFormat(draft1);
+    logStage("DRAFT_1", draft1);
 
-  let rawPost = await callDirectWithRetry(draft2UserPrompt, "post-writer-draft2");
-  rawPost = enforcePostFormat(rawPost);
-  logStage("DRAFT_2", rawPost);
+    // ── Draft Critic ──────────────────────────────────────────────────────────
+    console.log("🔍 [draft-critic] Analysing Draft 1...");
+    let critiqueJson;
+    try {
+      const critiqueRaw = await callOpenRouterWithModel(
+        "anthropic/claude-3.7-sonnet",
+        buildDraftCriticSystemPrompt(),
+        draft1
+      );
+      critiqueJson = extractFirstJsonObject(critiqueRaw);
+      if (!critiqueJson) throw new Error("No valid JSON object found in Draft Critic response");
+      logStage("DRAFT_CRITIQUE", critiqueJson);
+    } catch (err) {
+      console.warn(`⚠️ [draft-critic] JSON parse failed, falling back to raw text: ${err.message}`);
+      critiqueJson = null;
+    }
 
-  const polisherPrompt = buildPostPolisherPrompt(rawPost);
-  const post = await callDirectWithRetry(polisherPrompt, "post-polisher");
+    // ── Post Writer — Draft 2 ─────────────────────────────────────────────────
+    const postWriterSystemPrompt = buildPostWriterPrompt("").split("\n").slice(0, 3).join("\n"); // system context hint
+    const draft2UserPrompt = [
+      "You are rewriting a LinkedIn post based on a critique.",
+      "",
+      "Here is the original draft:",
+      draft1,
+      "",
+      "Here is the critique:",
+      critiqueJson ? JSON.stringify(critiqueJson, null, 2) : "(No structured critique available — improve the hook, remove generic phrases, and tighten the ending.)",
+      "",
+      "Rewrite the post by fixing every issue listed in rewrite_instructions. Rules:",
+      "- Keep the same core idea and insight",
+      "- Do not change the fundamental angle",
+      "- Fix the hook first",
+      "- Replace every flagged generic phrase with a specific detail",
+      "- Do not add any new generic advice",
+      "- Output only the rewritten post, no explanation"
+    ].join("\n");
 
-  // Build image concept now (cheap LLM call) but do NOT generate image yet
-  console.log("🎨 Preparing image concept (image deferred until user confirms)...");
-  const imageConceptPrompt = buildImageConceptPrompt(chosenStory.trim(), post);
-  const imageConceptRaw = await callDirectWithRetry(imageConceptPrompt, "image-concept");
-  const imageConcept = normalizeImageConcept(imageConceptRaw, chosenStory.trim());
+    let rawPost = await callDirectWithRetry(draft2UserPrompt, "post-writer-draft2");
+    rawPost = enforcePostFormat(rawPost);
+    logStage("DRAFT_2", rawPost);
 
-  assertPost(post, "autopost");
-  rememberTopic(chosenStory.trim());
-  logStage("FINAL_POST", post);
-  logStage("IMAGE_CONCEPT", imageConcept);
+    const polisherPrompt = buildPostPolisherPrompt(rawPost);
+    const post = await callDirectWithRetry(polisherPrompt, "post-polisher");
+
+    // Build image concept now (cheap LLM call) but do NOT generate image yet
+    console.log("🎨 Preparing image concept (image deferred until user confirms)...");
+    const imageConceptPrompt = buildImageConceptPrompt(chosenStory.trim(), post);
+    const imageConceptRaw = await callDirectWithRetry(imageConceptPrompt, "image-concept");
+    const imageConcept = normalizeImageConcept(imageConceptRaw, chosenStory.trim());
+
+    assertPost(post, "autopost");
+    rememberTopic(chosenStory.trim());
+    logStage("FINAL_POST", post);
+    logStage("IMAGE_CONCEPT", imageConcept);
     return { post, source, chosenStory: chosenStory.trim(), imageConcept };
   } finally {
     isPipelineRunning = false;
@@ -1629,7 +1629,7 @@ async function runTopicPostPipeline(topic) {
 
   const anglePrompt = buildDiscussionAnglePrompt(topic, hiddenShift);
   const discussionAngle = await callDirectWithRetry(anglePrompt, "discussion-angle-manual");
-  
+
   if (discussionAngle.trim().toUpperCase() === "SKIP") {
     throw new Error("Failed discussion test: Not enough professional tension or discussion potential.");
   }
@@ -1730,7 +1730,7 @@ async function runTopicPostPipeline(topic) {
 
 async function runResearchPipeline(topic) {
   console.log(`🚀 Starting Deep Research Content Brief for: "${topic}"`);
-  
+
   const briefPrompt = [
     "I need a comprehensive content brief for a high-impact blog and social campaign.",
     `Topic: ${topic}`,
@@ -1760,7 +1760,7 @@ async function runResearchPipeline(topic) {
 
   rememberTopic(topic);
   logStage("CONTENT_BRIEF", researchBrief);
-  
+
   return {
     post: socialPost,
     analysis: "📊 Content Brief Analysis Complete.",
@@ -1790,7 +1790,7 @@ async function shortenAndSendPost(chatId) {
     const newPost = enforcePostFormat(newPostRaw);
 
     pending.post = newPost;
-    
+
     await sendChunked(chatId, newPost);
     await safeSendMessage(chatId, "✅ Shortened post ready!\n\nWant an image? Reply YES to generate it.");
   } catch (err) {
@@ -1883,7 +1883,7 @@ async function sendPhoto(chatId, photoUrl, caption) {
       });
 
       try {
-        fs.unlink(photoUrl, () => {});
+        fs.unlink(photoUrl, () => { });
       } catch (_) { }
     }
 
@@ -2089,9 +2089,9 @@ async function runHookGenerationForPost(topic, region = "Global") {
   const fullTopic = prefix ? `${prefix}${topic}` : topic;
 
   const agentPairs = [
-    { name: "startup_news",    fn: buildStartupNewsHooksPrompt },
+    { name: "startup_news", fn: buildStartupNewsHooksPrompt },
     { name: "personal_growth", fn: buildPersonalGrowthHooksPrompt },
-    { name: "linkedin_safe",   fn: buildLinkedinSafeHooksPrompt },
+    { name: "linkedin_safe", fn: buildLinkedinSafeHooksPrompt },
   ];
 
   const results = await Promise.allSettled(
@@ -2310,14 +2310,14 @@ async function runHookAgentsForTopic(topic, region, category) {
   const fullTopic = prefix + topic;
 
   const agentBuilders = [
-    { name: "news_general",         fn: buildNewsGeneralHooksPrompt },
+    { name: "news_general", fn: buildNewsGeneralHooksPrompt },
     { name: "news_current_affairs", fn: buildCurrentAffairsHooksPrompt },
-    { name: "news_dmv_edtech",      fn: buildDmvEdtechHooksPrompt },
-    { name: "startup_news",         fn: buildStartupNewsHooksPrompt },
-    { name: "controversy_agent",    fn: buildControversyHooksPrompt },
-    { name: "personal_growth",      fn: buildPersonalGrowthHooksPrompt },
-    { name: "humor_spicy",          fn: buildHumorSpicyHooksPrompt },
-    { name: "linkedin_safe",        fn: buildLinkedinSafeHooksPrompt },
+    { name: "news_dmv_edtech", fn: buildDmvEdtechHooksPrompt },
+    { name: "startup_news", fn: buildStartupNewsHooksPrompt },
+    { name: "controversy_agent", fn: buildControversyHooksPrompt },
+    { name: "personal_growth", fn: buildPersonalGrowthHooksPrompt },
+    { name: "humor_spicy", fn: buildHumorSpicyHooksPrompt },
+    { name: "linkedin_safe", fn: buildLinkedinSafeHooksPrompt },
   ];
 
   const results = [];
