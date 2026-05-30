@@ -37,6 +37,14 @@ const PENDING_IMAGE_TTL_MS = 10 * 60 * 1000; // 10 minutes — auto-expire stale
 const pendingTopicSelections = {};
 // { [chatId]: { topic, headlines: [{title, source}], expiresAt } }
 
+// Keyed by chatId. Stores category headlines shown to user for /autopost selection.
+const pendingAutopostSelections = {};
+// { [chatId]: { category, region, headlines: [{title, source, url}], expiresAt } }
+
+// Keyed by chatId. Stores final story choice until user selects platform.
+const pendingPlatformSelections = {};
+// { [chatId]: { flow: "topic"|"autopost", chosen, region?, source?, expiresAt } }
+
 const PENDING_TOPIC_TTL_MS = 5 * 60 * 1000; // 5 minutes to pick a headline
 
 // Optimize sharp for production memory usage
@@ -96,6 +104,22 @@ const CATEGORY_SUBREDDITS = {
   healthcare: ["healthtech", "medicine", "nursing", "healthcare", "digitalhealth", "biotech"],
   fintech: ["fintech", "personalfinance", "crypto", "investing", "banking", "payments", "wallstreetbets", "stocks", "finance", "etfs"],
   marketing: ["marketing", "socialmedia", "advertising", "copywriting", "growthhacking", "digitalmarketing", "contentmarketing"],
+  business: ["business", "economics", "entrepreneur", "finance", "smallbusiness", "investing"],
+  politics_policy: ["politics", "worldpolitics", "geopolitics", "NeutralPolitics", "policy", "economics"],
+  jobs_education: ["jobs", "careerguidance", "cscareerquestions", "education", "Indian_Academia", "UPSC"],
+  state_city_news: ["india", "IndiaSpeaks", "canada", "canadanews", "newyorkcity", "toronto"],
+  tech_it: ["technology", "programming", "MachineLearning", "sysadmin", "devops", "startups"],
+  economy_markets: ["economics", "investing", "stocks", "finance", "wallstreetbets", "IndiaInvestments"],
+  south_india_digest: ["india", "chennai", "bangalore", "kerala", "hyderabad", "telangana"],
+  nri_diaspora: ["NRI", "india", "immigration", "expats", "IndianDiaspora", "canada"],
+  gn_ind_en: ["india", "worldnews", "business", "economics", "geopolitics", "news"],
+  gn_ind_hi: ["india", "IndiaSpeaks", "indianews", "worldnews", "politics"],
+  gn_tn_ta: ["chennai", "tamilnadu", "india", "jobs", "education"],
+  gn_apts_te: ["andhra_pradesh", "telangana", "hyderabad", "india", "jobs"],
+  gn_ka_kn: ["bangalore", "karnataka", "developersIndia", "startups", "india"],
+  gn_mh_mr: ["mumbai", "maharashtra", "india", "economics", "news"],
+  gn_south_en: ["chennai", "bangalore", "kerala", "hyderabad", "india"],
+  gn_nri_en: ["NRI", "immigration", "expats", "india", "worldnews"],
   news_general: ["worldnews", "news", "upliftingnews", "nottheonion"],
   current_affairs: ["geopolitics", "worldpolitics", "economics", "unitedkingdom", "europe"],
   dmv_edtech: ["jee", "UPSC", "Indian_Academia", "udemy", "edtech", "learnprogramming"],
@@ -115,6 +139,22 @@ const REGION_SUBREDDITS = {
     healthcare: ["india", "healthtech", "medicine", "Ayurveda"],
     fintech: ["IndiaInvestments", "IndianStreetBets", "personalfinance", "india", "fintech"],
     marketing: ["digitalmarketing", "india", "marketing", "socialmedia"],
+    business: ["india_business", "economics", "IndiaInvestments", "StartupIndia", "india"],
+    politics_policy: ["IndiaSpeaks", "india", "geopolitics", "worldpolitics", "economics"],
+    jobs_education: ["jobs", "IndianAcademia", "jee", "UPSC", "india"],
+    state_city_news: ["india", "mumbai", "delhi", "bangalore", "chennai"],
+    tech_it: ["developersIndia", "india", "programming", "MachineLearning", "startups"],
+    economy_markets: ["IndiaInvestments", "IndianStreetBets", "economics", "stocks", "finance"],
+    south_india_digest: ["chennai", "bangalore", "kerala", "hyderabad", "telangana"],
+    nri_diaspora: ["india", "NRI", "immigration", "expats", "IndianDiaspora"],
+    gn_ind_en: ["india", "india_business", "worldnews", "economics", "StartupIndia"],
+    gn_ind_hi: ["india", "IndiaSpeaks", "indianews", "politics", "economics"],
+    gn_tn_ta: ["tamilnadu", "chennai", "india", "jobs", "education"],
+    gn_apts_te: ["andhra_pradesh", "telangana", "hyderabad", "india", "jobs"],
+    gn_ka_kn: ["karnataka", "bangalore", "developersIndia", "startups", "india"],
+    gn_mh_mr: ["maharashtra", "mumbai", "pune", "india", "economics"],
+    gn_south_en: ["chennai", "bangalore", "kerala", "hyderabad", "india"],
+    gn_nri_en: ["india", "NRI", "immigration", "expats", "IndianDiaspora"],
     news_general: ["india", "IndiaSpeaks", "worldnews", "indianews"],
     current_affairs: ["india", "IndiaSpeaks", "geopolitics", "worldpolitics"],
     controversy: ["india", "IndiaSpeaks", "unpopularopinion", "TrueOffMyChest"],
@@ -129,6 +169,22 @@ const REGION_SUBREDDITS = {
     healthcare: ["CanadaHealthcare", "canada", "healthtech", "medicine"],
     fintech: ["PersonalFinanceCanada", "CanadaInvesting", "canada", "fintech"],
     marketing: ["canada", "marketing", "digitalmarketing", "socialmedia"],
+    business: ["canadabusiness", "canada", "economics", "smallbusiness", "entrepreneur"],
+    politics_policy: ["CanadaPolitics", "canada", "onguardforthee", "geopolitics", "worldpolitics"],
+    jobs_education: ["canada", "jobs", "CanadaEducation", "careerguidance", "learnprogramming"],
+    state_city_news: ["canada", "toronto", "vancouver", "calgary", "canadanews"],
+    tech_it: ["canadiantech", "canada", "programming", "MachineLearning", "devops"],
+    economy_markets: ["CanadaInvesting", "PersonalFinanceCanada", "economics", "stocks", "finance"],
+    south_india_digest: ["canada", "toronto", "vancouver", "india", "Tamil"],
+    nri_diaspora: ["canada", "immigration", "expats", "NRI", "IndianDiaspora"],
+    gn_ind_en: ["canadanews", "worldnews", "economics", "canadabusiness", "india"],
+    gn_ind_hi: ["canadanews", "worldnews", "politics", "india", "canada"],
+    gn_tn_ta: ["canada", "toronto", "vancouver", "india", "Tamil"],
+    gn_apts_te: ["canada", "toronto", "india", "technology", "news"],
+    gn_ka_kn: ["canadiantech", "canada", "programming", "india", "startups"],
+    gn_mh_mr: ["canada", "canadanews", "economics", "india", "business"],
+    gn_south_en: ["canada", "toronto", "vancouver", "india", "news"],
+    gn_nri_en: ["canada", "immigration", "expats", "NRI", "IndianDiaspora"],
     news_general: ["canada", "canadanews", "worldnews", "onguardforthee"],
     current_affairs: ["canada", "CanadaPolitics", "geopolitics", "onguardforthee"],
     controversy: ["canada", "onguardforthee", "unpopularopinion", "changemyview"],
@@ -143,6 +199,22 @@ const REGION_SUBREDDITS = {
     healthcare: ["healthtech", "medicine", "nursing", "healthcare", "digitalhealth"],
     fintech: ["fintech", "personalfinance", "wallstreetbets", "stocks", "investing", "banking"],
     marketing: ["marketing", "socialmedia", "advertising", "copywriting", "digitalmarketing"],
+    business: ["business", "smallbusiness", "economics", "entrepreneur", "finance"],
+    politics_policy: ["politics", "neutralnews", "geopolitics", "worldpolitics", "economics"],
+    jobs_education: ["jobs", "careerguidance", "cscareerquestions", "education", "Teachers"],
+    state_city_news: ["USnews", "news", "newyorkcity", "losangeles", "chicago"],
+    tech_it: ["technology", "programming", "devops", "MachineLearning", "startups"],
+    economy_markets: ["stocks", "investing", "wallstreetbets", "economics", "finance"],
+    south_india_digest: ["USnews", "india", "immigration", "technology", "news"],
+    nri_diaspora: ["immigration", "expats", "india", "NRI", "news"],
+    gn_ind_en: ["USnews", "worldnews", "economics", "business", "india"],
+    gn_ind_hi: ["USnews", "worldnews", "politics", "india", "news"],
+    gn_tn_ta: ["USnews", "technology", "india", "immigration", "news"],
+    gn_apts_te: ["USnews", "technology", "india", "immigration", "business"],
+    gn_ka_kn: ["technology", "programming", "startups", "india", "USnews"],
+    gn_mh_mr: ["USnews", "economics", "business", "india", "finance"],
+    gn_south_en: ["USnews", "worldnews", "india", "technology", "news"],
+    gn_nri_en: ["immigration", "expats", "india", "NRI", "USnews"],
     news_general: ["news", "worldnews", "USnews", "politics", "nottheonion"],
     current_affairs: ["politics", "geopolitics", "worldpolitics", "economics", "neutralnews"],
     controversy: ["unpopularopinion", "changemyview", "AmItheAsshole", "TrueOffMyChest"],
@@ -176,9 +248,141 @@ const REGION_RSS_FEEDS = {
 };
 
 const DEFAULT_CATEGORY = "startup";
+const AUTOPPOST_CATEGORIES = [
+  "startup",
+  "edtech",
+  "ai",
+  "healthcare",
+  "fintech",
+  "marketing",
+  "business",
+  "politics_policy",
+  "jobs_education",
+  "state_city_news",
+  "tech_it",
+  "economy_markets",
+  "south_india_digest",
+  "nri_diaspora",
+  "gn_ind_en",
+  "gn_ind_hi",
+  "gn_tn_ta",
+  "gn_apts_te",
+  "gn_ka_kn",
+  "gn_mh_mr",
+  "gn_south_en",
+  "gn_nri_en",
+  "news_general",
+  "current_affairs",
+  "dmv_edtech",
+  "controversy",
+  "personal_growth",
+  "humor",
+];
+
+const AUTOPPOST_CATEGORY_ALIASES = {
+  india_daily_snapshot: "gn_ind_en",
+  bharat_news_hindi: "gn_ind_hi",
+  tamil_nadu_news_today: "gn_tn_ta",
+  telugu_24x7_news: "gn_apts_te",
+  karnataka_daily_news: "gn_ka_kn",
+  maharashtra_city_state_news: "gn_mh_mr",
+  south_india_news_radar: "gn_south_en",
+  nri_india_global_brief: "gn_nri_en",
+};
+
+const DEFAULT_AUTOPPOST_STRATEGY = {
+  query: "startup business technology",
+  googleHeadlinesLimit: 5,
+  signalLineCap: 40,
+  sourceMixHint: "Use a balanced mix: roughly 50% community signals and 50% Google News headlines.",
+  locale: { hl: "en-US", gl: "US", ceid: "US:en" },
+};
+
+const AUTOPPOST_CATEGORY_STRATEGY = {
+  gn_ind_en: {
+    query: "India top stories business economy policy markets",
+    defaultRegion: "India",
+    googleHeadlinesLimit: 8,
+    signalLineCap: 24,
+    sourceMixHint: "Prioritize Google News (70%) and use community signals as context (30%).",
+    locale: { hl: "en-IN", gl: "IN", ceid: "IN:en" },
+  },
+  gn_ind_hi: {
+    query: "भारत राष्ट्रीय समाचार राजनीति अर्थव्यवस्था",
+    defaultRegion: "India",
+    googleHeadlinesLimit: 8,
+    signalLineCap: 20,
+    sourceMixHint: "Prioritize Google News (75%) and use community signals mainly for sentiment/context (25%).",
+    locale: { hl: "hi", gl: "IN", ceid: "IN:hi" },
+  },
+  gn_tn_ta: {
+    query: "Tamil Nadu news jobs education governance",
+    defaultRegion: "India",
+    googleHeadlinesLimit: 8,
+    signalLineCap: 18,
+    sourceMixHint: "Prioritize regional Google headlines (70%), then add community context (30%).",
+    locale: { hl: "ta", gl: "IN", ceid: "IN:ta" },
+  },
+  gn_apts_te: {
+    query: "Andhra Pradesh Telangana news jobs economy",
+    defaultRegion: "India",
+    googleHeadlinesLimit: 8,
+    signalLineCap: 18,
+    sourceMixHint: "Prioritize AP/TS Google headlines (70%), with community signals as secondary context (30%).",
+    locale: { hl: "te", gl: "IN", ceid: "IN:te" },
+  },
+  gn_ka_kn: {
+    query: "Karnataka Bengaluru news startups IT civic",
+    defaultRegion: "India",
+    googleHeadlinesLimit: 7,
+    signalLineCap: 24,
+    sourceMixHint: "Use a near-balanced mix, slightly favoring community signals for startup/civic discussions (55% community, 45% Google).",
+    locale: { hl: "kn", gl: "IN", ceid: "IN:kn" },
+  },
+  gn_mh_mr: {
+    query: "Maharashtra Mumbai Pune news economy civic",
+    defaultRegion: "India",
+    googleHeadlinesLimit: 7,
+    signalLineCap: 22,
+    sourceMixHint: "Use a balanced mix: 60% Google regional headlines and 40% community signals.",
+    locale: { hl: "mr", gl: "IN", ceid: "IN:mr" },
+  },
+  gn_south_en: {
+    query: "South India TN Karnataka AP Telangana Kerala top stories",
+    defaultRegion: "India",
+    googleHeadlinesLimit: 8,
+    signalLineCap: 20,
+    sourceMixHint: "Prioritize curated Google headlines (70%) and use community quotes/snippets for local flavor (30%).",
+    locale: { hl: "en-IN", gl: "IN", ceid: "IN:en" },
+  },
+  gn_nri_en: {
+    query: "NRI India diaspora migration visa economy US Canada Gulf",
+    googleHeadlinesLimit: 7,
+    signalLineCap: 22,
+    sourceMixHint: "Use Google headlines as primary source (65%) and community discussions for diaspora sentiment (35%).",
+    locale: { hl: "en-US", gl: "US", ceid: "US:en" },
+  },
+};
+
+function normalizeCategoryKey(category) {
+  return String(category || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[\s-]+/g, "_");
+}
+
+function resolveAutopostCategory(category) {
+  const norm = normalizeCategoryKey(category);
+  return AUTOPPOST_CATEGORY_ALIASES[norm] || norm;
+}
+
+function getAutopostCategoryStrategy(category) {
+  const resolved = resolveAutopostCategory(category);
+  return { ...DEFAULT_AUTOPPOST_STRATEGY, ...(AUTOPPOST_CATEGORY_STRATEGY[resolved] || {}) };
+}
 
 function getSubredditsForCategory(category) {
-  const normCat = (category || "").toLowerCase().trim();
+  const normCat = resolveAutopostCategory(category);
   return CATEGORY_SUBREDDITS[normCat] || CATEGORY_SUBREDDITS[DEFAULT_CATEGORY];
 }
 
@@ -191,9 +395,68 @@ function getSubredditsForRegionAndCategory(region, category) {
   const regionMap = REGION_SUBREDDITS[region];
   if (!regionMap) return getSubredditsForCategory(category);
 
-  const normCat = (category || "").toLowerCase().trim();
+  const normCat = resolveAutopostCategory(category);
   // Use region-specific subs for this category, fall back to region's startup subs
   return regionMap[normCat] || regionMap["startup"] || getSubredditsForCategory(category);
+}
+
+function isGreetingMessage(text) {
+  const normalized = String(text || "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").trim();
+  const firstWord = normalized.split(/\s+/)[0];
+  return ["hi", "hello", "hey", "yo", "sup"].includes(firstWord);
+}
+
+function buildTelegramHelpText() {
+  return [
+    "📋 Commands:",
+    "/generate — Auto-pick a startup story and write a post",
+    "/autopost <category> [region] — e.g. /autopost edtech india",
+    "/post <topic> — Search latest news, pick 1–5, write a post",
+    "/research <goal> — Deep research brief + post",
+    "/hooks [region] [category] — Run 8-agent hook pipeline",
+    "/hooktopic <topic> | <region> — Run hooks for a specific topic",
+    "",
+    "Autopost categories:",
+    AUTOPPOST_CATEGORIES.map((category) => `• ${category}`).join("\n"),
+    "",
+    "After /post: reply 1–5 to choose which news article to write about.",
+    "After choosing 1–5: reply X, Facebook, or LinkedIn (or 1/2/3).",
+    "After any post: reply SHORT YES to make it short & crisp, or YES to generate an image.",
+    "Images expire in 10 min, news selection expires in 5 min."
+  ].join("\n");
+}
+
+function buildAutopostCategoriesText() {
+  const aliasLines = Object.entries(AUTOPPOST_CATEGORY_ALIASES)
+    .map(([alias, category]) => `• ${alias} -> ${category}`)
+    .join("\n");
+
+  return [
+    "Autopost categories (all):",
+    AUTOPPOST_CATEGORIES.map((category) => `• ${category}`).join("\n"),
+    "",
+    "Category aliases:",
+    aliasLines,
+  ].join("\n");
+}
+
+function buildNewsQuery(category, region = "Global") {
+  return [category, region && region !== "Global" ? region : ""].filter(Boolean).join(" ").trim();
+}
+
+function inferCategoryFromTopic(topic) {
+  const text = String(topic || "").toLowerCase();
+  const keywordMap = [
+    { category: "fintech", keywords: ["fintech", "bank", "banking", "payments", "payment", "crypto", "invest", "investing", "stock", "stocks", "finance", "financial"] },
+    { category: "edtech", keywords: ["edtech", "education", "learning", "school", "student", "teacher", "course", "academy", "exam"] },
+    { category: "healthcare", keywords: ["health", "healthcare", "medical", "medicine", "hospital", "doctor", "nurse", "biotech"] },
+    { category: "ai", keywords: ["ai", "artificial intelligence", "openai", "gpt", "llm", "machine learning", "ml", "chatgpt", "claude", "gemini"] },
+    { category: "marketing", keywords: ["marketing", "growth", "ads", "advertising", "brand", "seo", "social media", "content"] },
+    { category: "current_affairs", keywords: ["politics", "election", "war", "geopolitics", "economy", "policy", "government"] },
+  ];
+
+  const match = keywordMap.find((entry) => entry.keywords.some((keyword) => text.includes(keyword)));
+  return match?.category || DEFAULT_CATEGORY;
 }
 
 // ─── 3. UTILITIES & STATE ───────────────────────────────────────────────────
@@ -297,7 +560,23 @@ function buildStoryPickerPrompt(signals, source, recentTopics, category, region 
     edtech: "edtech and education",
     ai: "AI and tech",
     healthcare: "healthcare and healthtech",
-    fintech: "fintech and finance"
+    fintech: "fintech and finance",
+    business: "business and market",
+    politics_policy: "policy and current affairs",
+    jobs_education: "jobs and education",
+    state_city_news: "state and city news",
+    tech_it: "tech and IT",
+    economy_markets: "economy and market",
+    south_india_digest: "South India",
+    nri_diaspora: "NRI and diaspora",
+    gn_ind_en: "India English general news",
+    gn_ind_hi: "India Hindi general news",
+    gn_tn_ta: "Tamil Nadu regional news",
+    gn_apts_te: "Andhra Pradesh and Telangana regional news",
+    gn_ka_kn: "Karnataka state and Bengaluru ecosystem news",
+    gn_mh_mr: "Maharashtra city and state news",
+    gn_south_en: "South India digest for English audience",
+    gn_nri_en: "NRI and diaspora focused global India news",
   };
 
   const audience = audienceMap[(category || "").toLowerCase()] || "operator and startup";
@@ -354,6 +633,79 @@ function buildStoryPickerPrompt(signals, source, recentTopics, category, region 
     "",
     "Output EXACTLY one line: the story topic you chose. No explanation, no preamble.",
     "If nothing qualifies, output exactly: SKIP",
+  ].join("\n");
+}
+
+function buildAutopostTopStoriesPrompt(
+  liveSignals,
+  googleHeadlines,
+  source,
+  recentTopics,
+  category,
+  region = "Global",
+  sourceMixHint = DEFAULT_AUTOPPOST_STRATEGY.sourceMixHint
+) {
+  const recentBlock = recentTopics.length
+    ? `Avoid repeating these recently posted topics:\n${recentTopics.join("\n")}`
+    : "";
+
+  const audienceMap = {
+    startup: "startup and operator",
+    edtech: "edtech and education",
+    ai: "AI and tech",
+    healthcare: "healthcare and healthtech",
+    fintech: "fintech and finance",
+    marketing: "marketing and growth",
+    business: "business and market",
+    politics_policy: "policy and current affairs",
+    jobs_education: "jobs and education",
+    state_city_news: "state and city news",
+    tech_it: "tech and IT",
+    economy_markets: "economy and market",
+    south_india_digest: "South India",
+    nri_diaspora: "NRI and diaspora",
+    gn_ind_en: "India English general news",
+    gn_ind_hi: "India Hindi general news",
+    gn_tn_ta: "Tamil Nadu regional news",
+    gn_apts_te: "Andhra Pradesh and Telangana regional news",
+    gn_ka_kn: "Karnataka state and Bengaluru ecosystem news",
+    gn_mh_mr: "Maharashtra city and state news",
+    gn_south_en: "South India digest for English audience",
+    gn_nri_en: "NRI and diaspora focused global India news",
+  };
+
+  const audience = audienceMap[(category || "").toLowerCase()] || "operator and startup";
+
+  const googleBlock = googleHeadlines.length
+    ? googleHeadlines.map((item, index) => `${index + 1}. ${item.title} — ${item.source}`).join("\n")
+    : "(No Google News headlines found)";
+
+  return [
+    `You are a news curator selecting the TOP 5 story candidates for a ${audience} LinkedIn post.`,
+    "",
+    `REGION CONSTRAINT: prioritize stories for ${region}.`,
+    region === "Global"
+      ? "Global stories are allowed."
+      : `If a story is not directly tied to ${region}, only include it if it clearly matters to that audience.`,
+    "",
+    "Use BOTH inputs below: live community signals and Google News headlines.",
+    `SOURCE MIX TARGET: ${sourceMixHint}`,
+    "Rank them by discussion potential, relevance, recency, and repostability.",
+    "Do not output duplicates or near-duplicates.",
+    recentBlock,
+    "",
+    `Sources: ${source}`,
+    "",
+    "LIVE COMMUNITY SIGNALS:",
+    liveSignals,
+    "",
+    "GOOGLE NEWS HEADLINES:",
+    googleBlock,
+    "",
+    "Output ONLY a JSON array of exactly 5 objects. No markdown. No preamble. No explanation.",
+    "Schema for each object:",
+    '{ "title": "...", "source": "...", "reason": "..." }',
+    "Keep titles concise and news-like."
   ].join("\n");
 }
 
@@ -763,6 +1115,27 @@ function extractFirstJsonObject(text) {
   }
 }
 
+function extractFirstJsonArray(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch (_) { }
+
+  const start = raw.indexOf("[");
+  const end = raw.lastIndexOf("]");
+  if (start === -1 || end === -1 || end <= start) return null;
+
+  try {
+    const parsed = JSON.parse(raw.slice(start, end + 1));
+    return Array.isArray(parsed) ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 function normalizeImageConcept(rawConcept, topic) {
   const parsed = extractFirstJsonObject(rawConcept) || {};
 
@@ -1168,9 +1541,16 @@ async function fetchLiveSignals(category, region = "Global") {
 
 // ─── TOPIC HEADLINE SEARCH (Google News RSS — no API key required) ────────────
 
-async function fetchTopicHeadlines(topic) {
+async function fetchTopicHeadlines(topic, options = {}) {
+  const {
+    limit = 5,
+    hl = "en-US",
+    gl = "US",
+    ceid = "US:en",
+  } = options;
+
   const query = encodeURIComponent(topic);
-  const url = `https://news.google.com/rss/search?q=${query}&hl=en-US&gl=US&ceid=US:en`;
+  const url = `https://news.google.com/rss/search?q=${query}&hl=${encodeURIComponent(hl)}&gl=${encodeURIComponent(gl)}&ceid=${encodeURIComponent(ceid)}`;
 
   try {
     const res = await axios.get(url, {
@@ -1189,7 +1569,7 @@ async function fetchTopicHeadlines(topic) {
 
     const headlines = [];
     for (const item of itemMatches) {
-      if (headlines.length >= 5) break;
+      if (headlines.length >= limit) break;
 
       // Extract title (strip CDATA if present)
       const titleMatch = item.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/i);
@@ -1223,6 +1603,66 @@ async function fetchTopicHeadlines(topic) {
   }
 }
 
+async function fetchAutopostTopStories(category, region = "Global", queryText = category) {
+  const resolvedCategory = resolveAutopostCategory(category);
+  const strategy = getAutopostCategoryStrategy(resolvedCategory);
+  const effectiveRegion = (region === "Global" && strategy.defaultRegion) ? strategy.defaultRegion : region;
+  const effectiveQuery = queryText && queryText !== category
+    ? queryText
+    : strategy.query || buildNewsQuery(resolvedCategory, effectiveRegion);
+
+  const [liveSignalsResult, googleHeadlines] = await Promise.all([
+    fetchLiveSignals(resolvedCategory, effectiveRegion),
+    fetchTopicHeadlines(effectiveQuery, {
+      limit: strategy.googleHeadlinesLimit,
+      hl: strategy.locale?.hl,
+      gl: strategy.locale?.gl,
+      ceid: strategy.locale?.ceid,
+    }),
+  ]);
+
+  if (!liveSignalsResult?.data && (!googleHeadlines || googleHeadlines.length === 0)) {
+    return { stories: [], source: "none" };
+  }
+
+  const weightedSignals = limitSignalLines(liveSignalsResult?.data || "", strategy.signalLineCap);
+
+  const cleanedSignals = weightedSignals
+    ? await callDirectWithRetry(buildSignalCleanerPrompt(weightedSignals), "autopost-signal-cleaner")
+    : "";
+
+  const pickerPrompt = buildAutopostTopStoriesPrompt(
+    cleanedSignals || weightedSignals || "",
+    googleHeadlines || [],
+    liveSignalsResult?.source || "none",
+    recentTopics,
+    resolvedCategory,
+    effectiveRegion,
+    strategy.sourceMixHint
+  );
+
+  const raw = await callDirectWithRetry(pickerPrompt, "autopost-top-story-picker");
+  const parsed = extractFirstJsonArray(raw);
+
+  if (!parsed) {
+    return { stories: [], source: liveSignalsResult?.source || "none" };
+  }
+
+  const stories = parsed
+    .map((item) => ({
+      title: String(item?.title || "").trim(),
+      source: String(item?.source || "").trim() || "News",
+      reason: String(item?.reason || "").trim(),
+    }))
+    .filter((item) => item.title)
+    .slice(0, 5);
+
+  return {
+    stories,
+    source: liveSignalsResult?.source || "none",
+  };
+}
+
 
 
 function isTransient(err) {
@@ -1252,6 +1692,12 @@ function isTransient(err) {
   ];
 
   return keywords.some(k => msg.includes(k) || code.includes(k));
+}
+
+function limitSignalLines(text, maxLines) {
+  if (!text || !Number.isFinite(maxLines) || maxLines <= 0) return text || "";
+  const lines = String(text).split("\n").map((line) => line.trim()).filter(Boolean);
+  return lines.slice(0, maxLines).join("\n");
 }
 
 async function callOpenRouterDirect(prompt) {
@@ -1312,6 +1758,38 @@ async function callOpenRouterWithModel(model, systemPrompt, userMessage) {
 }
 
 // const OPENCLAW_MAIN = "C:\\Users\\BIT\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
+
+// LLM-powered simple-language post simplifier
+async function simplifyPostWithLLM(rawPost) {
+  const systemMsg = "You are a concise editor who rewrites text using simple, plain English without changing meaning.";
+  const userPrompt = [
+    "Rewrite the following social media post into simple, everyday English.",
+    "Preserve the original meaning, the main idea, and any hook or final question.",
+    "Use short sentences, simple words, and natural conversational tone.",
+    "Do NOT add facts, hashtags, or emojis unless they already exist in the post.",
+    "Return only the rewritten post (no commentary, no analysis).",
+    "",
+    "Post:",
+    rawPost
+  ].join("\n");
+
+  const resp = await callDirectWithRetry(userPrompt, "post-simplifier");
+
+  let text = null;
+  if (!resp) text = "";
+  else if (typeof resp === "string") text = resp;
+  else if (resp.text) text = resp.text;
+  else if (resp.choices && resp.choices[0]) {
+    const c = resp.choices[0];
+    text = c.message?.content || c.text || (c.output && c.output[0]?.content?.text);
+  } else if (resp.message && resp.message.content) {
+    text = resp.message.content;
+  } else {
+    text = String(resp);
+  }
+
+  return (Array.isArray(text) ? text.join("\n") : text || "").trim();
+}
 
 async function callDirectWithRetry(prompt, logName) {
   let attempt = 0;
@@ -1452,7 +1930,7 @@ function looksLikeClarification(text) {
   return m.includes("what is your timezone") || m.includes("how should i address you");
 }
 
-function enforcePostFormat(raw) {
+async function enforcePostFormat(raw) {
   if (!raw) return raw;
 
   // Collapse excessive spacing (3+ newlines into 2)
@@ -1463,7 +1941,15 @@ function enforcePostFormat(raw) {
   for (let i = 0; i < Math.min(lines.length, 3); i++) {
     if (looksLikeMeta(lines[i])) { startIdx = i + 1; }
   }
-  return lines.slice(startIdx).join("\n").trim();
+  processed = lines.slice(startIdx).join("\n").trim();
+
+  try {
+    const simplified = await simplifyPostWithLLM(processed);
+    return simplified || processed;
+  } catch (e) {
+    console.warn(`⚠️ [enforcePostFormat] LLM simplifier failed: ${e.message}`);
+    return processed;
+  }
 }
 
 function assertPost(post, contextMsg) {
@@ -1503,116 +1989,123 @@ async function runAutopostPipeline(category = null, region = "Global") {
       throw new Error(`No qualifying ${category || DEFAULT_CATEGORY} story found in this week's signals.`);
     }
 
-    logStage("CHOSEN_STORY", chosenStory);
-
-    const implicationPrompt = buildHiddenImplicationExtractorPrompt(chosenStory.trim());
-    const hiddenShift = await callDirectWithRetry(implicationPrompt, "hidden-implication");
-
-    logStage("HIDDEN_SHIFT", hiddenShift);
-
-    const anglePrompt = buildDiscussionAnglePrompt(chosenStory.trim(), hiddenShift);
-    const discussionAngle = await callDirectWithRetry(anglePrompt, "discussion-angle");
-
-    if (discussionAngle.trim().toUpperCase() === "SKIP") {
-      throw new Error("Failed discussion test: Not enough professional tension or discussion potential.");
-    }
-    logStage("DISCUSSION_ANGLE", discussionAngle);
-
-    // ── Argument Architect ────────────────────────────────────────────────────
-    console.log("🏗️  [argument-architect] Building content blueprint...");
-    let blueprint;
-    try {
-      const architectRaw = await callOpenRouterWithModel(
-        "openai/gpt-4o",
-        buildArgumentArchitectSystemPrompt(),
-        hiddenShift
-      );
-      blueprint = extractFirstJsonObject(architectRaw);
-      if (!blueprint) throw new Error("No valid JSON object found in Argument Architect response");
-      logStage("ARGUMENT_BLUEPRINT", blueprint);
-    } catch (err) {
-      console.warn(`⚠️ [argument-architect] JSON parse failed, falling back to raw text: ${err.message}`);
-      blueprint = hiddenShift; // raw-text fallback
-    }
-
-    // ── Hook Generation (runs in parallel with no blocking — 3 agents) ──────────
-    console.log("🪝 [hook-gen] Generating viral hook candidates...");
-    const hookCandidates = await runHookGenerationForPost(chosenStory.trim(), region);
-    const bestHook = await pickBestHookForPost(hookCandidates, chosenStory.trim());
-    if (bestHook) logStage("BEST_HOOK", bestHook);
-
-    // ── Post Writer — Draft 1 ─────────────────────────────────────────────────
-    const blueprintBase = typeof blueprint === "string"
-      ? `${chosenStory.trim()}\nHidden Shift: ${hiddenShift}\nDiscussion Angle: ${discussionAngle}\nBlueprint: ${blueprint}`
-      : `${chosenStory.trim()}\nHidden Shift: ${hiddenShift}\nDiscussion Angle: ${discussionAngle}\nBlueprint: ${JSON.stringify(blueprint, null, 2)}`;
-
-    const blueprintInput = bestHook
-      ? `${blueprintBase}\n\nMANDATORY OPENING HOOK — You MUST use this exact line as the very first line of the post, word-for-word:\n"${bestHook}"`
-      : blueprintBase;
-
-    const writerPrompt = buildPostWriterPrompt(blueprintInput);
-    let draft1 = await callDirectWithRetry(writerPrompt, "post-writer-draft1");
-    draft1 = enforcePostFormat(draft1);
-    logStage("DRAFT_1", draft1);
-
-    // ── Draft Critic ──────────────────────────────────────────────────────────
-    console.log("🔍 [draft-critic] Analysing Draft 1...");
-    let critiqueJson;
-    try {
-      const critiqueRaw = await callOpenRouterWithModel(
-        "anthropic/claude-3.7-sonnet",
-        buildDraftCriticSystemPrompt(),
-        draft1
-      );
-      critiqueJson = extractFirstJsonObject(critiqueRaw);
-      if (!critiqueJson) throw new Error("No valid JSON object found in Draft Critic response");
-      logStage("DRAFT_CRITIQUE", critiqueJson);
-    } catch (err) {
-      console.warn(`⚠️ [draft-critic] JSON parse failed, falling back to raw text: ${err.message}`);
-      critiqueJson = null;
-    }
-
-    // ── Post Writer — Draft 2 ─────────────────────────────────────────────────
-    const postWriterSystemPrompt = buildPostWriterPrompt("").split("\n").slice(0, 3).join("\n"); // system context hint
-    const draft2UserPrompt = [
-      "You are rewriting a LinkedIn post based on a critique.",
-      "",
-      "Here is the original draft:",
-      draft1,
-      "",
-      "Here is the critique:",
-      critiqueJson ? JSON.stringify(critiqueJson, null, 2) : "(No structured critique available — improve the hook, remove generic phrases, and tighten the ending.)",
-      "",
-      "Rewrite the post by fixing every issue listed in rewrite_instructions. Rules:",
-      "- Keep the same core idea and insight",
-      "- Do not change the fundamental angle",
-      "- Fix the hook first",
-      "- Replace every flagged generic phrase with a specific detail",
-      "- Do not add any new generic advice",
-      "- Output only the rewritten post, no explanation"
-    ].join("\n");
-
-    let rawPost = await callDirectWithRetry(draft2UserPrompt, "post-writer-draft2");
-    rawPost = enforcePostFormat(rawPost);
-    logStage("DRAFT_2", rawPost);
-
-    const polisherPrompt = buildPostPolisherPrompt(rawPost);
-    const post = await callDirectWithRetry(polisherPrompt, "post-polisher");
-
-    // Build image concept now (cheap LLM call) but do NOT generate image yet
-    console.log("🎨 Preparing image concept (image deferred until user confirms)...");
-    const imageConceptPrompt = buildImageConceptPrompt(chosenStory.trim(), post);
-    const imageConceptRaw = await callDirectWithRetry(imageConceptPrompt, "image-concept");
-    const imageConcept = normalizeImageConcept(imageConceptRaw, chosenStory.trim());
-
-    assertPost(post, "autopost");
-    rememberTopic(chosenStory.trim());
-    logStage("FINAL_POST", post);
-    logStage("IMAGE_CONCEPT", imageConcept);
-    return { post, source, chosenStory: chosenStory.trim(), imageConcept };
+    return await buildAutopostPost(chosenStory.trim(), { source, region });
   } finally {
     isPipelineRunning = false;
   }
+}
+
+async function buildAutopostPost(chosenStory, { source = "Google News", region = "Global" } = {}) {
+  const story = String(chosenStory || "").trim();
+  if (!story) {
+    throw new Error("No story provided for autopost generation.");
+  }
+
+  logStage("CHOSEN_STORY", story);
+
+  const implicationPrompt = buildHiddenImplicationExtractorPrompt(story);
+  const hiddenShift = await callDirectWithRetry(implicationPrompt, "hidden-implication");
+
+  logStage("HIDDEN_SHIFT", hiddenShift);
+
+  const anglePrompt = buildDiscussionAnglePrompt(story, hiddenShift);
+  const discussionAngle = await callDirectWithRetry(anglePrompt, "discussion-angle");
+
+  if (discussionAngle.trim().toUpperCase() === "SKIP") {
+    throw new Error("Failed discussion test: Not enough professional tension or discussion potential.");
+  }
+  logStage("DISCUSSION_ANGLE", discussionAngle);
+
+  // ── Argument Architect ────────────────────────────────────────────────────
+  console.log("🏗️  [argument-architect] Building content blueprint...");
+  let blueprint;
+  try {
+    const architectRaw = await callOpenRouterWithModel(
+      "openai/gpt-4o",
+      buildArgumentArchitectSystemPrompt(),
+      hiddenShift
+    );
+    blueprint = extractFirstJsonObject(architectRaw);
+    if (!blueprint) throw new Error("No valid JSON object found in Argument Architect response");
+    logStage("ARGUMENT_BLUEPRINT", blueprint);
+  } catch (err) {
+    console.warn(`⚠️ [argument-architect] JSON parse failed, falling back to raw text: ${err.message}`);
+    blueprint = hiddenShift;
+  }
+
+  // ── Hook Generation (runs in parallel with no blocking — 3 agents) ──────────
+  console.log("🪝 [hook-gen] Generating viral hook candidates...");
+  const hookCandidates = await runHookGenerationForPost(story, region);
+  const bestHook = await pickBestHookForPost(hookCandidates, story);
+  if (bestHook) logStage("BEST_HOOK", bestHook);
+
+  // ── Post Writer — Draft 1 ─────────────────────────────────────────────────
+  const blueprintBase = typeof blueprint === "string"
+    ? `${story}\nHidden Shift: ${hiddenShift}\nDiscussion Angle: ${discussionAngle}\nBlueprint: ${blueprint}`
+    : `${story}\nHidden Shift: ${hiddenShift}\nDiscussion Angle: ${discussionAngle}\nBlueprint: ${JSON.stringify(blueprint, null, 2)}`;
+
+  const blueprintInput = bestHook
+    ? `${blueprintBase}\n\nMANDATORY OPENING HOOK — You MUST use this exact line as the very first line of the post, word-for-word:\n"${bestHook}"`
+    : blueprintBase;
+
+  const writerPrompt = buildPostWriterPrompt(blueprintInput);
+  let draft1 = await callDirectWithRetry(writerPrompt, "post-writer-draft1");
+  draft1 = await enforcePostFormat(draft1);
+  logStage("DRAFT_1", draft1);
+
+  // ── Draft Critic ──────────────────────────────────────────────────────────
+  console.log("🔍 [draft-critic] Analysing Draft 1...");
+  let critiqueJson;
+  try {
+    const critiqueRaw = await callOpenRouterWithModel(
+      "anthropic/claude-3.7-sonnet",
+      buildDraftCriticSystemPrompt(),
+      draft1
+    );
+    critiqueJson = extractFirstJsonObject(critiqueRaw);
+    if (!critiqueJson) throw new Error("No valid JSON object found in Draft Critic response");
+    logStage("DRAFT_CRITIQUE", critiqueJson);
+  } catch (err) {
+    console.warn(`⚠️ [draft-critic] JSON parse failed, falling back to raw text: ${err.message}`);
+    critiqueJson = null;
+  }
+
+  // ── Post Writer — Draft 2 ─────────────────────────────────────────────────
+  const draft2UserPrompt = [
+    "You are rewriting a LinkedIn post based on a critique.",
+    "",
+    "Here is the original draft:",
+    draft1,
+    "",
+    "Here is the critique:",
+    critiqueJson ? JSON.stringify(critiqueJson, null, 2) : "(No structured critique available — improve the hook, remove generic phrases, and tighten the ending.)",
+    "",
+    "Rewrite the post by fixing every issue listed in rewrite_instructions. Rules:",
+    "- Keep the same core idea and insight",
+    "- Do not change the fundamental angle",
+    "- Fix the hook first",
+    "- Replace every flagged generic phrase with a specific detail",
+    "- Do not add any new generic advice",
+    "- Output only the rewritten post, no explanation"
+  ].join("\n");
+
+  let rawPost = await callDirectWithRetry(draft2UserPrompt, "post-writer-draft2");
+  rawPost = await enforcePostFormat(rawPost);
+  logStage("DRAFT_2", rawPost);
+
+  const polisherPrompt = buildPostPolisherPrompt(rawPost);
+  const post = await callDirectWithRetry(polisherPrompt, "post-polisher");
+
+  console.log("🎨 Preparing image concept (image deferred until user confirms)...");
+  const imageConceptPrompt = buildImageConceptPrompt(story, post);
+  const imageConceptRaw = await callDirectWithRetry(imageConceptPrompt, "image-concept");
+  const imageConcept = normalizeImageConcept(imageConceptRaw, story);
+
+  assertPost(post, "autopost");
+  rememberTopic(story);
+  logStage("FINAL_POST", post);
+  logStage("IMAGE_CONCEPT", imageConcept);
+  return { post, source, chosenStory: story, imageConcept };
 }
 
 async function runGeneratePipeline() {
@@ -1669,7 +2162,7 @@ async function runTopicPostPipeline(topic) {
 
   const draft1Prompt = buildTopicPostPrompt(blueprintInput);
   let draft1 = await callDirectWithRetry(draft1Prompt, "topic-post-draft1");
-  draft1 = enforcePostFormat(draft1);
+  draft1 = await enforcePostFormat(draft1);
   logStage("DRAFT_1", draft1);
 
   // ── Draft Critic ──────────────────────────────────────────────────────────
@@ -1709,7 +2202,7 @@ async function runTopicPostPipeline(topic) {
   ].join("\n");
 
   let rawPost = await callDirectWithRetry(draft2UserPrompt, "topic-post-draft2");
-  rawPost = enforcePostFormat(rawPost);
+  rawPost = await enforcePostFormat(rawPost);
   logStage("DRAFT_2", rawPost);
 
   const polisherPrompt = buildPostPolisherPrompt(rawPost);
@@ -1787,7 +2280,7 @@ async function shortenAndSendPost(chatId) {
   try {
     const shortenPrompt = buildShortCrispPrompt(pending.post);
     const newPostRaw = await callDirectWithRetry(shortenPrompt, "short-crisp-polisher");
-    const newPost = enforcePostFormat(newPostRaw);
+    const newPost = await enforcePostFormat(newPostRaw);
 
     pending.post = newPost;
 
@@ -1838,6 +2331,117 @@ async function generateAndSendImage(chatId) {
 function clampText(text) {
   if (!text || text.length <= TELEGRAM_MAX_TEXT) return text;
   return text.slice(0, TELEGRAM_MAX_TEXT) + "\n\n[truncated]";
+}
+
+function parsePlatformChoice(text) {
+  const value = String(text || "").trim().toLowerCase();
+  if (["1", "x", "twitter", "/x", "/twitter"].includes(value)) return "X";
+  if (["2", "facebook", "fb", "/facebook", "/fb"].includes(value)) return "Facebook";
+  if (["3", "linkedin", "li", "/linkedin", "/li"].includes(value)) return "LinkedIn";
+  return null;
+}
+
+function countWords(text) {
+  return String(text || "").trim().split(/\s+/).filter(Boolean).length;
+}
+
+function trimToWordLimit(text, maxWords) {
+  const words = String(text || "").trim().split(/\s+/).filter(Boolean);
+  if (words.length <= maxWords) return words.join(" ");
+  return `${words.slice(0, maxWords).join(" ").trimEnd()}...`;
+}
+
+function buildPlatformRewritePrompt(post, platform) {
+  const baseRules = [
+    "You are rewriting a social post for a single platform.",
+    "Keep only ONE central idea. Do not mix unrelated ideas.",
+    "Do not turn this into a newsletter.",
+    "Structure required:",
+    "1) Start with 1-2 short hook lines saying what happened or what the post is about.",
+    "2) Then 3-5 short lines on why this matters for this audience.",
+    "3) End with exactly one short question or reflection line to invite comments.",
+    "Avoid bullet points unless absolutely needed.",
+    "Use 1-2 small paragraphs only.",
+    "Return only the final post text.",
+  ];
+
+  const platformRules = platform === "X"
+    ? [
+      "Platform: X",
+      "Word count MUST be between 20 and 35 words, never above 35.",
+      "Use concise social style, not long explanation.",
+    ]
+    : [
+      `Platform: ${platform}`,
+      "Word count MUST be between 80 and 100 words, never above 100.",
+      "Keep language simple and clear.",
+    ];
+
+  return [
+    ...baseRules,
+    ...platformRules,
+    "",
+    "Original post:",
+    post,
+  ].join("\n");
+}
+
+async function formatPostForPlatform(post, platform) {
+  const raw = String(post || "").trim();
+  if (!raw) return raw;
+
+  // Preserve pre-existing LinkedIn behavior: do NOT enforce the new strict
+  // structure/word-count rules for LinkedIn. Return the pipeline's LinkedIn
+  // post with only basic formatting applied.
+  if (platform === "LinkedIn") {
+    try {
+      return await enforcePostFormat(raw);
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  // For X / Facebook apply strict rewrite + word-limit enforcement
+  const minWords = platform === "X" ? 20 : 80;
+  const maxWords = platform === "X" ? 35 : 100;
+  let candidate = raw;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const prompt = buildPlatformRewritePrompt(candidate, platform);
+      const rewritten = await callDirectWithRetry(prompt, `platform-formatter-${platform.toLowerCase()}`);
+      const cleaned = (await enforcePostFormat(rewritten))
+        .replace(/^\s*[-*•]\s+/gm, "")
+        .trim();
+
+      const wc = countWords(cleaned);
+      if (wc >= minWords && wc <= maxWords) {
+        return cleaned;
+      }
+
+      candidate = cleaned;
+    } catch (_) {
+      break;
+    }
+  }
+
+  // Deterministic fallback if rewriting fails constraints.
+  if (platform === "X") {
+    const singleLine = raw.replace(/\s*\n+\s*/g, " ").replace(/\s{2,}/g, " ").trim();
+    let compact = trimToWordLimit(singleLine, maxWords);
+    if (countWords(compact) < minWords) {
+      compact = `${compact} What do you think?`;
+      compact = trimToWordLimit(compact, maxWords);
+    }
+    return compact;
+  }
+
+  let trimmed = trimToWordLimit(raw.replace(/^\s*[-*•]\s+/gm, "").trim(), maxWords);
+  if (!/[?]$/.test(trimmed.trim())) {
+    trimmed = `${trimmed}\n\nWhat is your take?`;
+    trimmed = trimToWordLimit(trimmed, maxWords);
+  }
+  return trimmed;
 }
 
 async function safeSendMessage(chatId, text) {
@@ -1913,6 +2517,13 @@ app.post("/webhook", async (req, res) => {
         return;
       }
       isProcessing = true;
+
+      if (isGreetingMessage(text)) {
+        await safeSendMessage(chatId, "Hi! Here are all autopost categories you can use.");
+        await sendChunked(chatId, buildAutopostCategoriesText());
+        await safeSendMessage(chatId, "For command help, use /help");
+        return;
+      }
 
       if (text.toLowerCase() === "generate" || text.startsWith("/generate")) {
         await safeSendMessage(chatId, "⏳ Scanning startup signals, picking story, and writing post...");
@@ -2003,19 +2614,45 @@ app.post("/webhook", async (req, res) => {
 
       } else if (text.toLowerCase() === "autopost" || text.startsWith("/autopost")) {
         const args = text.split(" ").slice(1);
-        const category = args[0] ? args[0].toLowerCase() : DEFAULT_CATEGORY;
-        const region = args[1] ? (args[1].charAt(0).toUpperCase() + args[1].slice(1).toLowerCase()) : "Global";
-        await safeSendMessage(chatId, `⏳ Fetching signals for ${category} / ${region}...`);
-        const { post, source, chosenStory, imageConcept } = await runAutopostPipeline(category, region);
-        await safeSendMessage(chatId, `📡 Sources: ${source}\n🌍 Region: ${region}\n🎯 Story: ${chosenStory}`);
-        await sendChunked(chatId, post);
-        pendingImageRequests[chatId] = {
-          topic: chosenStory,
-          post,
-          imageConcept,
-          expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
-        };
-        await safeSendMessage(chatId, "✅ Post ready!\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
+        const rawCategory = args[0] || DEFAULT_CATEGORY;
+        const category = resolveAutopostCategory(rawCategory);
+        const categoryStrategy = getAutopostCategoryStrategy(category);
+        const region = args[1]
+          ? (args[1].charAt(0).toUpperCase() + args[1].slice(1).toLowerCase())
+          : (categoryStrategy.defaultRegion || "Global");
+
+        if (!AUTOPPOST_CATEGORIES.includes(category)) {
+          await safeSendMessage(
+            chatId,
+            `⚠️ Unknown category "${rawCategory}".\n\nUse one of:\n${AUTOPPOST_CATEGORIES.join(", ")}`
+          );
+          return;
+        }
+
+        await safeSendMessage(chatId, `🔎 Fetching top 5 live news items for ${category} / ${region}...`);
+
+        const { stories, source } = await fetchAutopostTopStories(category, region);
+
+        if (!stories.length) {
+          await safeSendMessage(chatId, `⚠️ Couldn't build a top 5 list from live signals and Google News for "${category}". Please try again in a moment.`);
+        } else {
+          const list = stories.map((item, i) => {
+            const reasonLine = item.reason ? `\n   • ${item.reason}` : "";
+            return `${i + 1}. ${item.title}\n   — ${item.source}${reasonLine}`;
+          }).join("\n\n");
+
+          pendingAutopostSelections[chatId] = {
+            category,
+            region,
+            headlines: stories,
+            source,
+            expiresAt: Date.now() + PENDING_TOPIC_TTL_MS
+          };
+
+          await safeSendMessage(chatId,
+            `📰 Top ${stories.length} stories for "${category}" (${region}) from live signals + Google News:\n\n${list}\n\nReply with a number (1–${stories.length}) to generate a post from that story.`
+          );
+        }
 
       } else if (text.toLowerCase() === "short yes" || text.toLowerCase() === "/short yes") {
         await shortenAndSendPost(chatId);
@@ -2041,34 +2678,93 @@ app.post("/webhook", async (req, res) => {
             await safeSendMessage(chatId, `❌ Invalid choice. Please reply with a number between 1 and ${pending.headlines.length}.`);
           } else {
             delete pendingTopicSelections[chatId];
-            const chosenHeadline = `${chosen.title} (Source: ${chosen.source})`;
-            await safeSendMessage(chatId, `✅ Got it! Writing post on:\n"${chosen.title}"\n\n⏳ Running pipeline...`);
+            pendingPlatformSelections[chatId] = {
+              flow: "topic",
+              chosen,
+              expiresAt: Date.now() + PENDING_TOPIC_TTL_MS
+            };
+            await safeSendMessage(
+              chatId,
+              `✅ Story selected:\n"${chosen.title}"\n\nWhere should I optimize this post for?\n1) X\n2) Facebook\n3) LinkedIn\n\nReply with X/Facebook/LinkedIn or 1/2/3.`
+            );
+          }
+        }
+
+      } else if (/^[1-5]$/.test(text.trim()) && pendingAutopostSelections[chatId]) {
+        const pending = pendingAutopostSelections[chatId];
+
+        if (Date.now() > pending.expiresAt) {
+          delete pendingAutopostSelections[chatId];
+          await safeSendMessage(chatId, "⏰ Selection expired (5 min limit). Run /autopost again.");
+        } else {
+          const idx = parseInt(text.trim(), 10) - 1;
+          const chosen = pending.headlines[idx];
+
+          if (!chosen) {
+            await safeSendMessage(chatId, `❌ Invalid choice. Please reply with a number between 1 and ${pending.headlines.length}.`);
+          } else {
+            delete pendingAutopostSelections[chatId];
+            pendingPlatformSelections[chatId] = {
+              flow: "autopost",
+              chosen,
+              region: pending.region,
+              source: pending.source,
+              expiresAt: Date.now() + PENDING_TOPIC_TTL_MS
+            };
+            await safeSendMessage(
+              chatId,
+              `✅ Story selected:\n"${chosen.title}"\n\nWhere should I optimize this post for?\n1) X\n2) Facebook\n3) LinkedIn\n\nReply with X/Facebook/LinkedIn or 1/2/3.`
+            );
+          }
+        }
+
+      } else if (pendingPlatformSelections[chatId]) {
+        const pending = pendingPlatformSelections[chatId];
+
+        if (Date.now() > pending.expiresAt) {
+          delete pendingPlatformSelections[chatId];
+          await safeSendMessage(chatId, "⏰ Platform selection expired (5 min limit). Pick a story again.");
+        } else {
+          const platform = parsePlatformChoice(text);
+          if (!platform) {
+            await safeSendMessage(chatId, "Please reply with X, Facebook, or LinkedIn (or 1/2/3).");
+          } else if (pending.flow === "topic") {
+            const chosenHeadline = `${pending.chosen.title} (Source: ${pending.chosen.source})`;
+            await safeSendMessage(chatId, `✅ Platform: ${platform}\n\n⏳ Running pipeline...`);
             const { post, imageConcept } = await runTopicPostPipeline(chosenHeadline);
-            await sendChunked(chatId, post);
+            const platformPost = await formatPostForPlatform(post, platform);
+            await sendChunked(chatId, platformPost);
             pendingImageRequests[chatId] = {
-              topic: chosen.title,
-              post,
+              topic: pending.chosen.title,
+              post: platformPost,
               imageConcept,
               expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
             };
+            delete pendingPlatformSelections[chatId];
+            await safeSendMessage(chatId, "✅ Post ready!\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
+          } else if (pending.flow === "autopost") {
+            await safeSendMessage(chatId, `✅ Platform: ${platform}\n\n⏳ Running autopost pipeline...`);
+            const { post, source, chosenStory, imageConcept } = await buildAutopostPost(pending.chosen.title, {
+              source: pending.chosen.source || pending.source || "News",
+              region: pending.region,
+            });
+            const platformPost = await formatPostForPlatform(post, platform);
+
+            await safeSendMessage(chatId, `📡 Sources: ${source}\n🌍 Region: ${pending.region}\n🎯 Story: ${chosenStory}`);
+            await sendChunked(chatId, platformPost);
+            pendingImageRequests[chatId] = {
+              topic: chosenStory,
+              post: platformPost,
+              imageConcept,
+              expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
+            };
+            delete pendingPlatformSelections[chatId];
             await safeSendMessage(chatId, "✅ Post ready!\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
           }
         }
 
       } else if (text.startsWith("/start") || text.startsWith("/help")) {
-        await safeSendMessage(chatId, [
-          "📋 Commands:",
-          "/generate — Auto-pick a startup story and write a post",
-          "/autopost [category] [region] — e.g. /autopost edtech india",
-          "/post <topic> — Search latest news, pick 1–5, write a post",
-          "/research <goal> — Deep research brief + post",
-          "/hooks [region] [category] — Run 8-agent hook pipeline",
-          "/hooktopic <topic> | <region> — Run hooks for a specific topic",
-          "",
-          "After /post: reply 1–5 to choose which news article to write about.",
-          "After any post: reply SHORT YES to make it short & crisp, or YES to generate an image.",
-          "Images expire in 10 min, news selection expires in 5 min."
-        ].join("\n"));
+        await safeSendMessage(chatId, buildTelegramHelpText());
       }
     } catch (err) {
       await safeSendMessage(chatId, `❌ Error: ${err.message}`);
