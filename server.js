@@ -420,8 +420,8 @@ function buildTelegramHelpText() {
     AUTOPPOST_CATEGORIES.map((category) => `• ${category}`).join("\n"),
     "",
     "After /post: reply 1–5 to choose which news article to write about.",
-    "After choosing 1–5: reply X, Facebook, or LinkedIn (or 1/2/3).",
-    "After any post: reply SHORT YES to make it short & crisp, or YES to generate an image.",
+    "After choosing 1–5: reply platform(s) — e.g. X, Facebook, LinkedIn (or 1/2/3). You can pick multiple: 'LinkedIn X', '1,2', 'all'.",
+    "After any post: reply with feedback to rewrite the post, SHORT YES to make it short & crisp, or YES to generate an image.",
     "Images expire in 10 min, news selection expires in 5 min."
   ].join("\n");
 }
@@ -1001,6 +1001,26 @@ function buildShortCrispPrompt(post) {
     "- Keep the exact same insight and primary message.",
     "- Use sharp, emotional pointers.",
     "- Output ONLY the rewritten post. No introduction, no explanation."
+  ].join("\n");
+}
+
+// FEEDBACK REWRITER: Rewrites a post based on user feedback
+function buildFeedbackRewritePrompt(post, feedback) {
+  return [
+    "You are a LinkedIn content editor. Rewrite the post below based on the user's feedback.",
+    "",
+    "Original Post:",
+    post,
+    "",
+    "User Feedback / Pointers:",
+    feedback,
+    "",
+    "Instructions:",
+    "- Apply the user's feedback precisely while keeping the post's core insight and message intact.",
+    "- Do NOT add fake statistics, personal anecdotes, or fabricated details.",
+    "- Maintain the operator voice: observant, grounded, concise, slightly opinionated.",
+    "- Keep the same general length (don't make it dramatically shorter or longer unless asked).",
+    "- Output ONLY the rewritten post. No introduction, no explanation, no markdown formatting."
   ].join("\n");
 }
 
@@ -2285,9 +2305,39 @@ async function shortenAndSendPost(chatId) {
     pending.post = newPost;
 
     await sendChunked(chatId, newPost);
-    await safeSendMessage(chatId, "✅ Shortened post ready!\n\nWant an image? Reply YES to generate it.");
+    await safeSendMessage(chatId, "✅ Shortened post ready!\n\nWant an image? Reply YES to generate it.\n\nOr send feedback to rewrite it further.");
   } catch (err) {
     console.error(`❌ [shorten-post] Failed: ${err.message}`);
+    await safeSendMessage(chatId, `❌ Rewrite failed: ${err.message}`);
+  }
+}
+
+// ─── FEEDBACK REWRITER ───────────────────────────────────────────────────────
+
+async function rewriteWithFeedback(chatId, feedback) {
+  const pending = pendingImageRequests[chatId];
+  if (!pending) {
+    await safeSendMessage(chatId, "⚠️ No pending post to rewrite. Run a post command first.");
+    return;
+  }
+  if (Date.now() > pending.expiresAt) {
+    delete pendingImageRequests[chatId];
+    await safeSendMessage(chatId, "⏰ Post session expired. Run the command again.");
+    return;
+  }
+
+  await safeSendMessage(chatId, "⏳ Rewriting post based on your feedback...");
+  try {
+    const prompt = buildFeedbackRewritePrompt(pending.post, feedback);
+    const rewrittenRaw = await callDirectWithRetry(prompt, "feedback-rewriter");
+    const rewritten = await enforcePostFormat(rewrittenRaw);
+
+    pending.post = rewritten;
+
+    await sendChunked(chatId, rewritten);
+    await safeSendMessage(chatId, "✅ Rewritten post ready!\n\nWant to make it short & crisp? Reply SHORT YES.\nWant an image? Reply YES.\nOr send more feedback to keep refining.");
+  } catch (err) {
+    console.error(`❌ [feedback-rewrite] Failed: ${err.message}`);
     await safeSendMessage(chatId, `❌ Rewrite failed: ${err.message}`);
   }
 }
@@ -2334,11 +2384,21 @@ function clampText(text) {
 }
 
 function parsePlatformChoice(text) {
-  const value = String(text || "").trim().toLowerCase();
-  if (["1", "x", "twitter", "/x", "/twitter"].includes(value)) return "X";
-  if (["2", "facebook", "fb", "/facebook", "/fb"].includes(value)) return "Facebook";
-  if (["3", "linkedin", "li", "/linkedin", "/li"].includes(value)) return "LinkedIn";
-  return null;
+  const raw = String(text || "").trim().toLowerCase();
+  if (raw === "all") return ["X", "Facebook", "LinkedIn"];
+
+  // Split by comma, slash, or whitespace
+  const tokens = raw.split(/[,\/\s]+/).filter(Boolean);
+  const platformSet = new Set();
+
+  for (const token of tokens) {
+    if (["1", "x", "twitter", "/x", "/twitter"].includes(token)) platformSet.add("X");
+    else if (["2", "facebook", "fb", "/facebook", "/fb"].includes(token)) platformSet.add("Facebook");
+    else if (["3", "linkedin", "li", "/linkedin", "/li"].includes(token)) platformSet.add("LinkedIn");
+  }
+
+  const result = Array.from(platformSet);
+  return result.length > 0 ? result : null;
 }
 
 function countWords(text) {
@@ -2352,33 +2412,50 @@ function trimToWordLimit(text, maxWords) {
 }
 
 function buildPlatformRewritePrompt(post, platform) {
-  const baseRules = [
-    "You are rewriting a social post for a single platform.",
-    "Keep only ONE central idea. Do not mix unrelated ideas.",
-    "Do not turn this into a newsletter.",
-    "Structure required:",
-    "1) Start with 1-2 short hook lines saying what happened or what the post is about.",
-    "2) Then 3-5 short lines on why this matters for this audience.",
-    "3) End with exactly one short question or reflection line to invite comments.",
-    "Avoid bullet points unless absolutely needed.",
-    "Use 1-2 small paragraphs only.",
+  const xRules = [
+    "Platform: X",
+    "Word count MUST be between 20 and 35 words, never above 35.",
+    "Use concise social style, not long explanation.",
     "Return only the final post text.",
   ];
 
-  const platformRules = platform === "X"
-    ? [
-      "Platform: X",
-      "Word count MUST be between 20 and 35 words, never above 35.",
-      "Use concise social style, not long explanation.",
-    ]
-    : [
-      `Platform: ${platform}`,
-      "Word count MUST be between 80 and 100 words, never above 100.",
-      "Keep language simple and clear.",
-    ];
+  const fbRules = [
+    "Platform: Facebook",
+    "Word count MUST be between 50 and 60 words. Never go below 45 or above 65.",
+    "Keep language simple, clear, and conversational.",
+    "CRITICAL: Vary the structure every time. Do NOT use a fixed template. Pick ONE of these patterns randomly:",
+    '  A) One single punchy paragraph (4-6 lines).',
+    '  B) Two paragraphs: a short hook (1-2 lines) + an insight/takeaway (2-4 lines).',
+    '  C) Three micro-paragraphs: observation → implication → question/reflection.',
+    '  D) Many tiny 2-line paragraphs stacked vertically.',
+    '  E) A 2-line hook, then a short 3-line body, then a 1-line closing.',
+    '  F) Four short paragraphs with mixed line lengths.',
+    "Use line breaks freely. Avoid bullet points.",
+    "Return only the final post text. No intro, no explanation.",
+  ];
+
+  const liRules = [
+    "Platform: LinkedIn",
+    "Word count MUST be around 100 words. Aim for 90-110 words. Never go below 80 or above 120.",
+    "Keep the operator voice: observant, grounded, concise, slightly opinionated.",
+    "CRITICAL: Vary the structure every time. Do NOT use a fixed template. Pick ONE of these patterns randomly:",
+    '  A) Two paragraphs: a sharp hook (3-4 lines) + a deeper insight with closing (4-6 lines).',
+    '  B) Three paragraphs: hook → specific example/implication → one-line reflection or question.',
+    '  C) Four short paragraphs with rhythm: short → medium → short → punchy closing.',
+    '  D) One flowing paragraph with natural line breaks (not a block of text).',
+    '  E) A 1-line hook, a 3-line body, a 2-line expansion, and a 1-line closing.',
+    '  F) Staggered lengths: 2-line hook, 4-line insight, 1-line twist/closing.',
+    "Mix short punchy lines with slightly longer ones. Avoid predictable symmetry.",
+    "No bullet points unless the topic genuinely needs them.",
+    "Return only the final post text. No intro, no explanation.",
+  ];
+
+  const platformRules = platform === "X" ? xRules : platform === "Facebook" ? fbRules : liRules;
 
   return [
-    ...baseRules,
+    "You are rewriting a social post for a single platform.",
+    "Keep only ONE central idea. Do not mix unrelated ideas.",
+    "Do not turn this into a newsletter.",
     ...platformRules,
     "",
     "Original post:",
@@ -2390,20 +2467,13 @@ async function formatPostForPlatform(post, platform) {
   const raw = String(post || "").trim();
   if (!raw) return raw;
 
-  // Preserve pre-existing LinkedIn behavior: do NOT enforce the new strict
-  // structure/word-count rules for LinkedIn. Return the pipeline's LinkedIn
-  // post with only basic formatting applied.
-  if (platform === "LinkedIn") {
-    try {
-      return await enforcePostFormat(raw);
-    } catch (_) {
-      return raw;
-    }
-  }
-
-  // For X / Facebook apply strict rewrite + word-limit enforcement
-  const minWords = platform === "X" ? 20 : 80;
-  const maxWords = platform === "X" ? 35 : 100;
+  // Apply platform-specific rewrite + word-limit enforcement for all platforms
+  const limits = {
+    X: { min: 20, max: 35 },
+    Facebook: { min: 45, max: 65 },
+    LinkedIn: { min: 80, max: 120 },
+  };
+  const { min, max } = limits[platform] || { min: 80, max: 120 };
   let candidate = raw;
 
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -2415,7 +2485,7 @@ async function formatPostForPlatform(post, platform) {
         .trim();
 
       const wc = countWords(cleaned);
-      if (wc >= minWords && wc <= maxWords) {
+      if (wc >= min && wc <= max) {
         return cleaned;
       }
 
@@ -2428,18 +2498,19 @@ async function formatPostForPlatform(post, platform) {
   // Deterministic fallback if rewriting fails constraints.
   if (platform === "X") {
     const singleLine = raw.replace(/\s*\n+\s*/g, " ").replace(/\s{2,}/g, " ").trim();
-    let compact = trimToWordLimit(singleLine, maxWords);
-    if (countWords(compact) < minWords) {
+    let compact = trimToWordLimit(singleLine, max);
+    if (countWords(compact) < min) {
       compact = `${compact} What do you think?`;
-      compact = trimToWordLimit(compact, maxWords);
+      compact = trimToWordLimit(compact, max);
     }
     return compact;
   }
 
-  let trimmed = trimToWordLimit(raw.replace(/^\s*[-*•]\s+/gm, "").trim(), maxWords);
-  if (!/[?]$/.test(trimmed.trim())) {
+  // Facebook / LinkedIn fallback
+  let trimmed = trimToWordLimit(raw.replace(/^\s*[-*•]\s+/gm, "").trim(), max);
+  if (countWords(trimmed) < min) {
     trimmed = `${trimmed}\n\nWhat is your take?`;
-    trimmed = trimToWordLimit(trimmed, maxWords);
+    trimmed = trimToWordLimit(trimmed, max);
   }
   return trimmed;
 }
@@ -2535,7 +2606,7 @@ app.post("/webhook", async (req, res) => {
           imageConcept,
           expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
         };
-        await safeSendMessage(chatId, "✅ Post ready!\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
+        await safeSendMessage(chatId, "✅ Post ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
 
       } else if (text.startsWith("/post ")) {
         const topic = text.replace("/post", "").trim();
@@ -2550,7 +2621,7 @@ app.post("/webhook", async (req, res) => {
           const { post, imageConcept } = await runTopicPostPipeline(topic);
           await sendChunked(chatId, post);
           pendingImageRequests[chatId] = { topic, post, imageConcept, expiresAt: Date.now() + PENDING_IMAGE_TTL_MS };
-          await safeSendMessage(chatId, "✅ Post ready!\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
+          await safeSendMessage(chatId, "✅ Post ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
         } else {
           // Show numbered headlines for user to pick
           const list = headlines.map((h, i) =>
@@ -2581,7 +2652,7 @@ app.post("/webhook", async (req, res) => {
           imageConcept: result.imageConcept,
           expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
         };
-        await safeSendMessage(chatId, "✅ Research + post ready!\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
+        await safeSendMessage(chatId, "✅ Research + post ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
 
       } else if (text.startsWith("/hooks ") || text === "/hooks") {
         // Usage: /hooks [region] [category]
@@ -2658,7 +2729,7 @@ app.post("/webhook", async (req, res) => {
         await shortenAndSendPost(chatId);
 
       } else if (text.toLowerCase() === "short no" || text.toLowerCase() === "/short no") {
-        await safeSendMessage(chatId, "Okay! Keeping the original post.\n\nWant an image? Reply YES to generate it.");
+        await safeSendMessage(chatId, "Okay! Keeping the original post.\n\nWant an image? Reply YES to generate it.\n\nOr reply with feedback to rewrite it.");
 
       } else if (text.toLowerCase() === "yes" || text.toLowerCase() === "/yes") {
         await generateAndSendImage(chatId);
@@ -2685,7 +2756,7 @@ app.post("/webhook", async (req, res) => {
             };
             await safeSendMessage(
               chatId,
-              `✅ Story selected:\n"${chosen.title}"\n\nWhere should I optimize this post for?\n1) X\n2) Facebook\n3) LinkedIn\n\nReply with X/Facebook/LinkedIn or 1/2/3.`
+              `✅ Story selected:\n"${chosen.title}"\n\nWhere should I optimize this post for?\n1) X\n2) Facebook\n3) LinkedIn\n\nReply with one or more platforms (e.g. X, LinkedIn, Facebook, 1/2/3, or 'all').`
             );
           }
         }
@@ -2713,7 +2784,7 @@ app.post("/webhook", async (req, res) => {
             };
             await safeSendMessage(
               chatId,
-              `✅ Story selected:\n"${chosen.title}"\n\nWhere should I optimize this post for?\n1) X\n2) Facebook\n3) LinkedIn\n\nReply with X/Facebook/LinkedIn or 1/2/3.`
+              `✅ Story selected:\n"${chosen.title}"\n\nWhere should I optimize this post for?\n1) X\n2) Facebook\n3) LinkedIn\n\nReply with one or more platforms (e.g. X, LinkedIn, Facebook, 1/2/3, or 'all').`
             );
           }
         }
@@ -2725,46 +2796,70 @@ app.post("/webhook", async (req, res) => {
           delete pendingPlatformSelections[chatId];
           await safeSendMessage(chatId, "⏰ Platform selection expired (5 min limit). Pick a story again.");
         } else {
-          const platform = parsePlatformChoice(text);
-          if (!platform) {
-            await safeSendMessage(chatId, "Please reply with X, Facebook, or LinkedIn (or 1/2/3).");
+          const platforms = parsePlatformChoice(text);
+          if (!platforms) {
+            await safeSendMessage(chatId, "Please reply with one or more platforms: X, Facebook, LinkedIn (or 1/2/3). You can combine them like 'LinkedIn X' or '1,2' or 'all'.");
           } else if (pending.flow === "topic") {
             const chosenHeadline = `${pending.chosen.title} (Source: ${pending.chosen.source})`;
-            await safeSendMessage(chatId, `✅ Platform: ${platform}\n\n⏳ Running pipeline...`);
+            await safeSendMessage(chatId, `✅ Platforms: ${platforms.join(", ")}\n\n⏳ Running pipeline...`);
             const { post, imageConcept } = await runTopicPostPipeline(chosenHeadline);
-            const platformPost = await formatPostForPlatform(post, platform);
-            await sendChunked(chatId, platformPost);
+
+            let primaryPost = post;
+            for (const platform of platforms) {
+              const platformPost = await formatPostForPlatform(post, platform);
+              await safeSendMessage(chatId, `📱 ${platform}:`);
+              await sendChunked(chatId, platformPost);
+              if (platform === "LinkedIn") primaryPost = platformPost;
+              else if (primaryPost === post) primaryPost = platformPost;
+            }
+
             pendingImageRequests[chatId] = {
               topic: pending.chosen.title,
-              post: platformPost,
+              post: primaryPost,
               imageConcept,
               expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
             };
             delete pendingPlatformSelections[chatId];
-            await safeSendMessage(chatId, "✅ Post ready!\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
+            await safeSendMessage(chatId, "✅ Posts ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
           } else if (pending.flow === "autopost") {
-            await safeSendMessage(chatId, `✅ Platform: ${platform}\n\n⏳ Running autopost pipeline...`);
+            await safeSendMessage(chatId, `✅ Platforms: ${platforms.join(", ")}\n\n⏳ Running autopost pipeline...`);
             const { post, source, chosenStory, imageConcept } = await buildAutopostPost(pending.chosen.title, {
               source: pending.chosen.source || pending.source || "News",
               region: pending.region,
             });
-            const platformPost = await formatPostForPlatform(post, platform);
+
+            let primaryPost = post;
+            for (const platform of platforms) {
+              const platformPost = await formatPostForPlatform(post, platform);
+              await safeSendMessage(chatId, `📱 ${platform}:`);
+              await sendChunked(chatId, platformPost);
+              if (platform === "LinkedIn") primaryPost = platformPost;
+              else if (primaryPost === post) primaryPost = platformPost;
+            }
 
             await safeSendMessage(chatId, `📡 Sources: ${source}\n🌍 Region: ${pending.region}\n🎯 Story: ${chosenStory}`);
-            await sendChunked(chatId, platformPost);
             pendingImageRequests[chatId] = {
               topic: chosenStory,
-              post: platformPost,
+              post: primaryPost,
               imageConcept,
               expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
             };
             delete pendingPlatformSelections[chatId];
-            await safeSendMessage(chatId, "✅ Post ready!\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
+            await safeSendMessage(chatId, "✅ Posts ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
           }
         }
 
       } else if (text.startsWith("/start") || text.startsWith("/help")) {
         await safeSendMessage(chatId, buildTelegramHelpText());
+
+      } else if (pendingImageRequests[chatId]) {
+        const pending = pendingImageRequests[chatId];
+        if (Date.now() > pending.expiresAt) {
+          delete pendingImageRequests[chatId];
+          await safeSendMessage(chatId, "⏰ Post session expired. Run the command again.");
+        } else {
+          await rewriteWithFeedback(chatId, text);
+        }
       }
     } catch (err) {
       await safeSendMessage(chatId, `❌ Error: ${err.message}`);
