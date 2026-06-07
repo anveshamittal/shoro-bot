@@ -30,7 +30,7 @@ let isPipelineRunning = false;
 const pendingImageRequests = {};
 // { [chatId]: { topic, post, imageConcept, expiresAt } }
 
-const PENDING_IMAGE_TTL_MS = 10 * 60 * 1000; // 10 minutes — auto-expire stale requests
+const PENDING_IMAGE_TTL_MS = 20 * 60 * 1000; // 20 minutes — auto-expire stale requests
 
 // ─── PENDING TOPIC SELECTIONS ─────────────────────────────────────────────────
 // Keyed by chatId. Stores news headlines shown to user so they can pick 1–5.
@@ -44,6 +44,10 @@ const pendingAutopostSelections = {};
 // Keyed by chatId. Stores final story choice until user selects platform.
 const pendingPlatformSelections = {};
 // { [chatId]: { flow: "topic"|"autopost", chosen, region?, source?, expiresAt } }
+
+// Keyed by chatId. Stores category selections shown in greeting.
+const pendingGreetingSelections = {};
+// { [chatId]: { options: [string], expiresAt } }
 
 const PENDING_TOPIC_TTL_MS = 5 * 60 * 1000; // 5 minutes to pick a headline
 
@@ -291,7 +295,6 @@ const AUTOPPOST_CATEGORY_ALIASES = {
 };
 
 const DEFAULT_AUTOPPOST_STRATEGY = {
-  query: "startup business technology",
   googleHeadlinesLimit: 5,
   signalLineCap: 40,
   sourceMixHint: "Use a balanced mix: roughly 50% community signals and 50% Google News headlines.",
@@ -299,6 +302,48 @@ const DEFAULT_AUTOPPOST_STRATEGY = {
 };
 
 const AUTOPPOST_CATEGORY_STRATEGY = {
+  startup: {
+    query: "startup business technology",
+  },
+  humor: {
+    query: "funny news satire comedy internet culture weird news",
+  },
+  ai: {
+    query: "artificial intelligence AI machine learning large language models tech",
+  },
+  edtech: {
+    query: "edtech education technology learning online education university",
+  },
+  healthcare: {
+    query: "healthcare healthtech medicine digital health biotech medical science",
+  },
+  fintech: {
+    query: "fintech finance cryptocurrency investment banking financial tech payments",
+  },
+  marketing: {
+    query: "marketing advertising branding growth hacking social media copywriting",
+  },
+  business: {
+    query: "business corporate news economy markets company strategy",
+  },
+  politics_policy: {
+    query: "politics public policy governance elections legislation world affairs",
+  },
+  jobs_education: {
+    query: "jobs employment careers labor market education UPSC exams",
+  },
+  tech_it: {
+    query: "technology software engineering programming cloud computing IT industry",
+  },
+  economy_markets: {
+    query: "economy global markets stock market finance inflation interest rates",
+  },
+  personal_growth: {
+    query: "personal development growth productivity habits success self improvement",
+  },
+  controversy: {
+    query: "controversial debate hot takes public opinion social issues",
+  },
   gn_ind_en: {
     query: "India top stories business economy policy markets",
     defaultRegion: "India",
@@ -417,27 +462,51 @@ function buildTelegramHelpText() {
     "/hooktopic <topic> | <region> — Run hooks for a specific topic",
     "",
     "Autopost categories:",
-    AUTOPPOST_CATEGORIES.map((category) => `• ${category}`).join("\n"),
+    AUTOPPOST_CATEGORIES.map((category) => `• /autopost ${category}`).join("\n"),
     "",
     "After /post: reply 1–5 to choose which news article to write about.",
     "After choosing 1–5: reply platform(s) — e.g. X, Facebook, LinkedIn (or 1/2/3). You can pick multiple: 'LinkedIn X', '1,2', 'all'.",
     "After any post: reply with feedback to rewrite the post, SHORT YES to make it short & crisp, or YES to generate an image.",
-    "Images expire in 10 min, news selection expires in 5 min."
+    "Images expire in 20 min, news selection expires in 5 min."
   ].join("\n");
 }
 
 function buildAutopostCategoriesText() {
-  const aliasLines = Object.entries(AUTOPPOST_CATEGORY_ALIASES)
-    .map(([alias, category]) => `• ${alias} -> ${category}`)
-    .join("\n");
+  const options = [];
 
-  return [
+  // Add all categories
+  for (const cat of AUTOPPOST_CATEGORIES) {
+    options.push(cat);
+  }
+  // Add all aliases
+  const aliasKeys = Object.keys(AUTOPPOST_CATEGORY_ALIASES);
+  for (const alias of aliasKeys) {
+    options.push(alias);
+  }
+
+  // Build the numbered list
+  const categoryLines = AUTOPPOST_CATEGORIES.map((category, idx) => {
+    const num = idx + 1;
+    return `${num}. /autopost ${category}`;
+  }).join("\n");
+
+  const aliasLines = aliasKeys.map((alias, idx) => {
+    const num = AUTOPPOST_CATEGORIES.length + idx + 1;
+    const category = AUTOPPOST_CATEGORY_ALIASES[alias];
+    return `${num}. /autopost ${alias} (resolves to ${category})`;
+  }).join("\n");
+
+  const text = [
     "Autopost categories (all):",
-    AUTOPPOST_CATEGORIES.map((category) => `• ${category}`).join("\n"),
+    categoryLines,
     "",
     "Category aliases:",
     aliasLines,
+    "",
+    "💡 Reply with a number to run that autopost category automatically!"
   ].join("\n");
+
+  return { text, options };
 }
 
 function buildNewsQuery(category, region = "Global") {
@@ -1545,8 +1614,18 @@ async function fetchLiveSignals(category, region = "Global") {
     const subs = getSubredditsForRegionAndCategory(region, category);
     sources.push("Reddit(" + subs.map((s) => `r/${s}`).join(",") + ")");
   }
-  if (hn.status === "fulfilled" && hn.value && region === "Global") {
-    // HN is US/global-heavy — only include for Global, not for specific regions
+  const hnCompatible = [
+    "startup",
+    "ai",
+    "tech_it",
+    "business",
+    "fintech",
+    "jobs_education",
+    "economy_markets"
+  ].includes(category);
+
+  if (hn.status === "fulfilled" && hn.value && region === "Global" && hnCompatible) {
+    // HN is US/global-heavy — only include for Global and tech/business categories
     parts.push(hn.value);
     sources.push("Hacker News");
   }
@@ -2355,7 +2434,7 @@ async function generateAndSendImage(chatId) {
   // Check expiry
   if (Date.now() > pending.expiresAt) {
     delete pendingImageRequests[chatId];
-    await safeSendMessage(chatId, "⏰ Image request expired (10 min limit). Run the command again.");
+    await safeSendMessage(chatId, "⏰ Image request expired (20 min limit). Run the command again.");
     return;
   }
 
@@ -2572,6 +2651,52 @@ async function sendPhoto(chatId, photoUrl, caption) {
   }
 }
 
+async function triggerAutopostFlow(chatId, rawCategory, regionArg = null) {
+  const category = resolveAutopostCategory(rawCategory);
+  const categoryStrategy = getAutopostCategoryStrategy(category);
+  const region = regionArg
+    ? (regionArg.charAt(0).toUpperCase() + regionArg.slice(1).toLowerCase())
+    : (categoryStrategy.defaultRegion || "Global");
+
+  if (!AUTOPPOST_CATEGORIES.includes(category)) {
+    await safeSendMessage(
+      chatId,
+      `⚠️ Unknown category "${rawCategory}".\n\nUse one of:\n${AUTOPPOST_CATEGORIES.join(", ")}`
+    );
+    return;
+  }
+
+  await safeSendMessage(chatId, `🔎 Fetching top 5 live news items for ${category} / ${region}...`);
+
+  try {
+    const { stories, source } = await fetchAutopostTopStories(category, region);
+
+    if (!stories.length) {
+      await safeSendMessage(chatId, `⚠️ Couldn't build a top 5 list from live signals and Google News for "${category}". Please try again in a moment.`);
+    } else {
+      const list = stories.map((item, i) => {
+        const reasonLine = item.reason ? `\n   • ${item.reason}` : "";
+        return `${i + 1}. ${item.title}\n   — ${item.source}${reasonLine}`;
+      }).join("\n\n");
+
+      pendingAutopostSelections[chatId] = {
+        category,
+        region,
+        headlines: stories,
+        source,
+        expiresAt: Date.now() + PENDING_TOPIC_TTL_MS
+      };
+
+      await safeSendMessage(chatId,
+        `📰 Top ${stories.length} stories for "${category}" (${region}) from live signals + Google News:\n\n${list}\n\nReply with a number (1–${stories.length}) to generate a post from that story.`
+      );
+    }
+  } catch (err) {
+    console.error(`❌ [autopost-flow] Failed: ${err.message}`);
+    await safeSendMessage(chatId, `❌ Error: ${err.message}`);
+  }
+}
+
 app.post("/webhook", async (req, res) => {
   const message = req.body?.message;
   if (!message?.text) return res.sendStatus(200);
@@ -2591,7 +2716,12 @@ app.post("/webhook", async (req, res) => {
 
       if (isGreetingMessage(text)) {
         await safeSendMessage(chatId, "Hi! Here are all autopost categories you can use.");
-        await sendChunked(chatId, buildAutopostCategoriesText());
+        const { text: categoriesText, options } = buildAutopostCategoriesText();
+        await sendChunked(chatId, categoriesText);
+        pendingGreetingSelections[chatId] = {
+          options,
+          expiresAt: Date.now() + PENDING_TOPIC_TTL_MS
+        };
         await safeSendMessage(chatId, "For command help, use /help");
         return;
       }
@@ -2686,44 +2816,7 @@ app.post("/webhook", async (req, res) => {
       } else if (text.toLowerCase() === "autopost" || text.startsWith("/autopost")) {
         const args = text.split(" ").slice(1);
         const rawCategory = args[0] || DEFAULT_CATEGORY;
-        const category = resolveAutopostCategory(rawCategory);
-        const categoryStrategy = getAutopostCategoryStrategy(category);
-        const region = args[1]
-          ? (args[1].charAt(0).toUpperCase() + args[1].slice(1).toLowerCase())
-          : (categoryStrategy.defaultRegion || "Global");
-
-        if (!AUTOPPOST_CATEGORIES.includes(category)) {
-          await safeSendMessage(
-            chatId,
-            `⚠️ Unknown category "${rawCategory}".\n\nUse one of:\n${AUTOPPOST_CATEGORIES.join(", ")}`
-          );
-          return;
-        }
-
-        await safeSendMessage(chatId, `🔎 Fetching top 5 live news items for ${category} / ${region}...`);
-
-        const { stories, source } = await fetchAutopostTopStories(category, region);
-
-        if (!stories.length) {
-          await safeSendMessage(chatId, `⚠️ Couldn't build a top 5 list from live signals and Google News for "${category}". Please try again in a moment.`);
-        } else {
-          const list = stories.map((item, i) => {
-            const reasonLine = item.reason ? `\n   • ${item.reason}` : "";
-            return `${i + 1}. ${item.title}\n   — ${item.source}${reasonLine}`;
-          }).join("\n\n");
-
-          pendingAutopostSelections[chatId] = {
-            category,
-            region,
-            headlines: stories,
-            source,
-            expiresAt: Date.now() + PENDING_TOPIC_TTL_MS
-          };
-
-          await safeSendMessage(chatId,
-            `📰 Top ${stories.length} stories for "${category}" (${region}) from live signals + Google News:\n\n${list}\n\nReply with a number (1–${stories.length}) to generate a post from that story.`
-          );
-        }
+        await triggerAutopostFlow(chatId, rawCategory, args[1]);
 
       } else if (text.toLowerCase() === "short yes" || text.toLowerCase() === "/short yes") {
         await shortenAndSendPost(chatId);
@@ -2851,6 +2944,22 @@ app.post("/webhook", async (req, res) => {
 
       } else if (text.startsWith("/start") || text.startsWith("/help")) {
         await safeSendMessage(chatId, buildTelegramHelpText());
+
+      } else if (/^\d+$/.test(text.trim()) && pendingGreetingSelections[chatId]) {
+        const pending = pendingGreetingSelections[chatId];
+        if (Date.now() > pending.expiresAt) {
+          delete pendingGreetingSelections[chatId];
+          await safeSendMessage(chatId, "⏰ Category selection expired. Send 'hi' to see the categories again.");
+        } else {
+          const idx = parseInt(text.trim(), 10) - 1;
+          const chosen = pending.options[idx];
+          if (!chosen) {
+            await safeSendMessage(chatId, `❌ Invalid choice. Please reply with a number between 1 and ${pending.options.length}.`);
+          } else {
+            delete pendingGreetingSelections[chatId];
+            await triggerAutopostFlow(chatId, chosen);
+          }
+        }
 
       } else if (pendingImageRequests[chatId]) {
         const pending = pendingImageRequests[chatId];
