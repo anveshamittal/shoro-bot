@@ -49,7 +49,12 @@ const pendingPlatformSelections = {};
 const pendingGreetingSelections = {};
 // { [chatId]: { options: [string], expiresAt } }
 
-const PENDING_TOPIC_TTL_MS = 5 * 60 * 1000; // 5 minutes to pick a headline
+// ─── PENDING MULTI-POST REQUESTS ──────────────────────────────────────────────
+// Keyed by chatId. Stores multiple generated posts for combined feedback/image.
+const pendingMultiPostRequests = {};
+// { [chatId]: { posts: [{topic, post, imageConcept, platforms, source, region}], expiresAt } }
+
+const PENDING_TOPIC_TTL_MS = 40 * 60 * 1000; // 40 minutes to pick a headline
 
 // Optimize sharp for production memory usage
 sharp.cache(false);
@@ -464,10 +469,11 @@ function buildTelegramHelpText() {
     "Autopost categories:",
     AUTOPPOST_CATEGORIES.map((category) => `• /autopost ${category}`).join("\n"),
     "",
-    "After /post: reply 1–5 to choose which news article to write about.",
-    "After choosing 1–5: reply platform(s) — e.g. X, Facebook, LinkedIn (or 1/2/3). You can pick multiple: 'LinkedIn X', '1,2', 'all'.",
-    "After any post: reply with feedback to rewrite the post, SHORT YES to make it short & crisp, or YES to generate an image.",
-    "Images expire in 20 min, news selection expires in 5 min."
+    "After /post or /autopost: reply with numbers to choose stories. You can pick multiple: '1,3,5' or 'all'.",
+    "After choosing stories: pick platform(s) for each — e.g. X, Facebook, LinkedIn (or 1/2/3). You can pick multiple: 'LinkedIn X', '1,2', 'all'.",
+    "After posts are ready: reply with feedback to rewrite, SHORT <number> to shorten, IMAGE <number>/ALL for images.",
+    "Translate any post: /language <code> — e.g. /language te (Telugu), /language hi (Hindi), /language ta (Tamil).",
+    "Images expire in 20 min, news selection expires in 40 min."
   ].join("\n");
 }
 
@@ -608,6 +614,57 @@ function randomAgent() {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// ─── MULTI-TOPIC SELECTION HELPERS ───────────────────────────────────────────
+
+function parseTopicSelection(text, maxCount) {
+  const trimmed = String(text || "").trim().toLowerCase();
+  if (trimmed === "all") return Array.from({ length: maxCount }, (_, i) => i);
+
+  const indices = trimmed
+    .split(/[,\s]+/)
+    .map((t) => parseInt(t.trim(), 10))
+    .filter((n) => !isNaN(n) && n >= 1 && n <= maxCount)
+    .map((n) => n - 1);
+
+  return [...new Set(indices)]; // dedupe, preserves order
+}
+
+function formatPlatformQuestion(topicTitle, topicIndex, total) {
+  return `📰 Topic ${topicIndex + 1} of ${total}:\n"${topicTitle}"\n\nWhere should I optimize this post for?\n1) X\n2) Facebook\n3) LinkedIn\n\nReply with one or more platforms (e.g. X, LinkedIn, Facebook, 1/2/3, or 'all').`;
+}
+
+function parseMultiPostCommand(text) {
+  const lower = String(text || "").trim().toLowerCase();
+
+  // "image 1" → { action: "image", index: 0 }
+  // "image all" → { action: "image", all: true }
+  // "rewrite 2 make it shorter" → { action: "rewrite", index: 1, feedback: "make it shorter" }
+  // "short 3" → { action: "short", index: 2 }
+  // "yes" → { action: "image", index: 0 } (backward compat)
+
+  const imageMatch = lower.match(/^image\s+(\d+|all)$/);
+  if (imageMatch) {
+    if (imageMatch[1] === "all") return { action: "image", all: true };
+    return { action: "image", index: parseInt(imageMatch[1], 10) - 1 };
+  }
+
+  const rewriteMatch = lower.match(/^rewrite\s+(\d+)\s+(.+)$/);
+  if (rewriteMatch) {
+    return { action: "rewrite", index: parseInt(rewriteMatch[1], 10) - 1, feedback: text.trim().slice(rewriteMatch[0].indexOf(rewriteMatch[2])) };
+  }
+
+  const shortMatch = lower.match(/^short\s+(\d+)$/);
+  if (shortMatch) {
+    return { action: "short", index: parseInt(shortMatch[1], 10) - 1 };
+  }
+
+  if (lower === "yes" || lower === "/yes") {
+    return { action: "image", index: 0 };
+  }
+
+  return null;
 }
 
 function logStage(stage, value) {
@@ -1858,6 +1915,54 @@ async function callOpenRouterWithModel(model, systemPrompt, userMessage) {
 
 // const OPENCLAW_MAIN = "C:\\Users\\BIT\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
 
+// LLM-powered post translator
+async function translatePostWithLLM(rawPost, targetLanguage) {
+  const langMap = {
+    te: "Telugu",
+    hi: "Hindi",
+    ta: "Tamil",
+    kn: "Kannada",
+    ml: "Malayalam",
+    mr: "Marathi",
+    bn: "Bengali",
+    gu: "Gujarati",
+    pa: "Punjabi",
+    ur: "Urdu",
+  };
+  const langName = langMap[targetLanguage] || targetLanguage;
+
+  const userPrompt = [
+    `Translate the following social media post into ${langName}.`,
+    "Rules:",
+    `- Write the ENTIRE post in ${langName} script (not English transliteration).`,
+    "- Preserve the original meaning, tone, and emotional impact.",
+    "- Keep the same hook style and post structure.",
+    "- Use natural, conversational language that sounds native.",
+    "- Do NOT add explanations, hashtags, or emojis unless they exist in the original.",
+    "- Return ONLY the translated post. No preamble, no notes.",
+    "",
+    "Post:",
+    rawPost
+  ].join("\n");
+
+  const resp = await callDirectWithRetry(userPrompt, `post-translator-${targetLanguage}`);
+
+  let text = null;
+  if (!resp) text = "";
+  else if (typeof resp === "string") text = resp;
+  else if (resp.text) text = resp.text;
+  else if (resp.choices && resp.choices[0]) {
+    const c = resp.choices[0];
+    text = c.message?.content || c.text || (c.output && c.output[0]?.content?.text);
+  } else if (resp.message && resp.message.content) {
+    text = resp.message.content;
+  } else {
+    text = String(resp);
+  }
+
+  return (Array.isArray(text) ? text.join("\n") : text || "").trim();
+}
+
 // LLM-powered simple-language post simplifier
 async function simplifyPostWithLLM(rawPost) {
   const systemMsg = "You are a concise editor who rewrites text using simple, plain English without changing meaning.";
@@ -2688,7 +2793,7 @@ async function triggerAutopostFlow(chatId, rawCategory, regionArg = null) {
       };
 
       await safeSendMessage(chatId,
-        `📰 Top ${stories.length} stories for "${category}" (${region}) from live signals + Google News:\n\n${list}\n\nReply with a number (1–${stories.length}) to generate a post from that story.`
+        `📰 Top ${stories.length} stories for "${category}" (${region}) from live signals + Google News:\n\n${list}\n\nReply with number(s) to generate post(s).\n• Single: 1, 2, 3...\n• Multiple: 1,3,5 or "all"`
       );
     }
   } catch (err) {
@@ -2738,6 +2843,57 @@ app.post("/webhook", async (req, res) => {
         };
         await safeSendMessage(chatId, "✅ Post ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
 
+      } else if (text.startsWith("/language ")) {
+        const langCode = text.replace("/language", "").trim().toLowerCase();
+        const supportedLangs = ["te", "hi", "ta", "kn", "ml", "mr", "bn", "gu", "pa", "ur"];
+        if (!langCode || !supportedLangs.includes(langCode)) {
+          await safeSendMessage(chatId, `❌ Usage: /language <code>\nSupported: te (Telugu), hi (Hindi), ta (Tamil), kn (Kannada), ml (Malayalam), mr (Marathi), bn (Bengali), gu (Gujarati), pa (Punjabi), ur (Urdu)`);
+          return;
+        }
+
+        // Try to find a post to translate
+        let sourcePost = null;
+        let sourceType = null;
+
+        if (pendingMultiPostRequests[chatId]) {
+          const mp = pendingMultiPostRequests[chatId];
+          if (Date.now() <= mp.expiresAt && mp.posts.length > 0) {
+            sourcePost = mp.posts[0].post;
+            sourceType = "multi";
+          }
+        }
+        if (!sourcePost && pendingImageRequests[chatId]) {
+          const pi = pendingImageRequests[chatId];
+          if (Date.now() <= pi.expiresAt) {
+            sourcePost = pi.post;
+            sourceType = "single";
+          }
+        }
+
+        if (!sourcePost) {
+          await safeSendMessage(chatId, "⚠️ No active post to translate. Generate a post first with /generate, /post, or /autopost.");
+          return;
+        }
+
+        await safeSendMessage(chatId, `⏳ Translating to ${langCode.toUpperCase()}...`);
+        try {
+          const translated = await translatePostWithLLM(sourcePost, langCode);
+          await sendChunked(chatId, `🌐 Translated (${langCode.toUpperCase()}):\n\n${translated}`);
+
+          // Also translate other posts in multi-post session
+          if (sourceType === "multi" && pendingMultiPostRequests[chatId].posts.length > 1) {
+            const mp = pendingMultiPostRequests[chatId];
+            for (let i = 1; i < mp.posts.length; i++) {
+              await safeSendMessage(chatId, `⏳ Translating post ${i + 1}...`);
+              const t = await translatePostWithLLM(mp.posts[i].post, langCode);
+              await sendChunked(chatId, `🌐 Post ${i + 1} (${langCode.toUpperCase()}):\n\n${t}`);
+            }
+          }
+        } catch (err) {
+          console.error(`❌ [language] Translation failed: ${err.message}`);
+          await safeSendMessage(chatId, `❌ Translation failed: ${err.message}`);
+        }
+
       } else if (text.startsWith("/post ")) {
         const topic = text.replace("/post", "").trim();
         if (!topic) return safeSendMessage(chatId, "Usage: /post <topic>");
@@ -2765,7 +2921,7 @@ app.post("/webhook", async (req, res) => {
           };
 
           await safeSendMessage(chatId,
-            `📰 Found ${headlines.length} recent news articles about "${topic}":\n\n${list}\n\nReply with a number (1–${headlines.length}) to pick which one to write about.`
+            `📰 Found ${headlines.length} recent news articles about "${topic}":\n\n${list}\n\nReply with number(s) to pick which one(s) to write about.\n• Single: 1, 2, 3...\n• Multiple: 1,3,5 or "all"`
           );
         }
 
@@ -2827,20 +2983,21 @@ app.post("/webhook", async (req, res) => {
       } else if (text.toLowerCase() === "yes" || text.toLowerCase() === "/yes") {
         await generateAndSendImage(chatId);
 
-      } else if (/^[1-5]$/.test(text.trim()) && pendingTopicSelections[chatId]) {
-        // User is picking a headline from the /post flow
+      } else if (pendingTopicSelections[chatId]) {
+        // User is picking headline(s) from the /post flow
         const pending = pendingTopicSelections[chatId];
 
         if (Date.now() > pending.expiresAt) {
           delete pendingTopicSelections[chatId];
-          await safeSendMessage(chatId, "⏰ Selection expired (5 min limit). Run /post again.");
+          await safeSendMessage(chatId, "⏰ Selection expired (40 min limit). Run /post again.");
         } else {
-          const idx = parseInt(text.trim(), 10) - 1;
-          const chosen = pending.headlines[idx];
+          const indices = parseTopicSelection(text, pending.headlines.length);
 
-          if (!chosen) {
-            await safeSendMessage(chatId, `❌ Invalid choice. Please reply with a number between 1 and ${pending.headlines.length}.`);
-          } else {
+          if (indices.length === 0) {
+            await safeSendMessage(chatId, `❌ Invalid choice. Please reply with numbers between 1 and ${pending.headlines.length}. You can pick multiple like '1,3,5' or 'all'.`);
+          } else if (indices.length === 1) {
+            // Single topic — original flow
+            const chosen = pending.headlines[indices[0]];
             delete pendingTopicSelections[chatId];
             pendingPlatformSelections[chatId] = {
               flow: "topic",
@@ -2851,22 +3008,39 @@ app.post("/webhook", async (req, res) => {
               chatId,
               `✅ Story selected:\n"${chosen.title}"\n\nWhere should I optimize this post for?\n1) X\n2) Facebook\n3) LinkedIn\n\nReply with one or more platforms (e.g. X, LinkedIn, Facebook, 1/2/3, or 'all').`
             );
+          } else {
+            // Multiple topics — enter multi-platform selection flow
+            const selectedTopics = indices.map((i) => pending.headlines[i]);
+            delete pendingTopicSelections[chatId];
+            pendingPlatformSelections[chatId] = {
+              flow: "topic-multi",
+              topics: selectedTopics.map((chosen) => ({ chosen })),
+              currentIndex: 0,
+              platformsSoFar: [],
+              expiresAt: Date.now() + PENDING_TOPIC_TTL_MS
+            };
+            await safeSendMessage(
+              chatId,
+              `✅ ${selectedTopics.length} stories selected!\n\n` + formatPlatformQuestion(selectedTopics[0].title, 0, selectedTopics.length)
+            );
           }
         }
 
-      } else if (/^[1-5]$/.test(text.trim()) && pendingAutopostSelections[chatId]) {
+      } else if (pendingAutopostSelections[chatId]) {
+        // User is picking headline(s) from the /autopost flow
         const pending = pendingAutopostSelections[chatId];
 
         if (Date.now() > pending.expiresAt) {
           delete pendingAutopostSelections[chatId];
-          await safeSendMessage(chatId, "⏰ Selection expired (5 min limit). Run /autopost again.");
+          await safeSendMessage(chatId, "⏰ Selection expired (40 min limit). Run /autopost again.");
         } else {
-          const idx = parseInt(text.trim(), 10) - 1;
-          const chosen = pending.headlines[idx];
+          const indices = parseTopicSelection(text, pending.headlines.length);
 
-          if (!chosen) {
-            await safeSendMessage(chatId, `❌ Invalid choice. Please reply with a number between 1 and ${pending.headlines.length}.`);
-          } else {
+          if (indices.length === 0) {
+            await safeSendMessage(chatId, `❌ Invalid choice. Please reply with numbers between 1 and ${pending.headlines.length}. You can pick multiple like '1,3,5' or 'all'.`);
+          } else if (indices.length === 1) {
+            // Single topic — original flow
+            const chosen = pending.headlines[indices[0]];
             delete pendingAutopostSelections[chatId];
             pendingPlatformSelections[chatId] = {
               flow: "autopost",
@@ -2879,6 +3053,21 @@ app.post("/webhook", async (req, res) => {
               chatId,
               `✅ Story selected:\n"${chosen.title}"\n\nWhere should I optimize this post for?\n1) X\n2) Facebook\n3) LinkedIn\n\nReply with one or more platforms (e.g. X, LinkedIn, Facebook, 1/2/3, or 'all').`
             );
+          } else {
+            // Multiple topics — enter multi-platform selection flow
+            const selectedTopics = indices.map((i) => pending.headlines[i]);
+            delete pendingAutopostSelections[chatId];
+            pendingPlatformSelections[chatId] = {
+              flow: "autopost-multi",
+              topics: selectedTopics.map((chosen) => ({ chosen, region: pending.region, source: pending.source })),
+              currentIndex: 0,
+              platformsSoFar: [],
+              expiresAt: Date.now() + PENDING_TOPIC_TTL_MS
+            };
+            await safeSendMessage(
+              chatId,
+              `✅ ${selectedTopics.length} stories selected!\n\n` + formatPlatformQuestion(selectedTopics[0].title, 0, selectedTopics.length)
+            );
           }
         }
 
@@ -2887,7 +3076,7 @@ app.post("/webhook", async (req, res) => {
 
         if (Date.now() > pending.expiresAt) {
           delete pendingPlatformSelections[chatId];
-          await safeSendMessage(chatId, "⏰ Platform selection expired (5 min limit). Pick a story again.");
+          await safeSendMessage(chatId, "⏰ Platform selection expired (40 min limit). Pick a story again.");
         } else {
           const platforms = parsePlatformChoice(text);
           if (!platforms) {
@@ -2939,6 +3128,110 @@ app.post("/webhook", async (req, res) => {
             };
             delete pendingPlatformSelections[chatId];
             await safeSendMessage(chatId, "✅ Posts ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
+          } else if (pending.flow === "topic-multi" || pending.flow === "autopost-multi") {
+            // Multi-topic flow: collect platforms for current topic, then ask for next
+            pending.platformsSoFar.push(platforms);
+            pending.currentIndex += 1;
+
+            if (pending.currentIndex < pending.topics.length) {
+              // Ask for platforms for the next topic
+              const nextTopic = pending.topics[pending.currentIndex].chosen;
+              await safeSendMessage(
+                chatId,
+                `✅ Platforms saved!\n\n` + formatPlatformQuestion(nextTopic.title, pending.currentIndex, pending.topics.length)
+              );
+            } else {
+              // All platforms collected — generate all posts in parallel
+              delete pendingPlatformSelections[chatId];
+              await safeSendMessage(chatId, `✅ All platforms set! ⏳ Generating ${pending.topics.length} posts in parallel...`);
+
+              const isAutopost = pending.flow === "autopost-multi";
+              const generationResults = await Promise.allSettled(
+                pending.topics.map(async (topicData, i) => {
+                  const topicPlatforms = pending.platformsSoFar[i];
+                  try {
+                    let post, imageConcept, source, chosenStory;
+
+                    if (isAutopost) {
+                      const result = await buildAutopostPost(topicData.chosen.title, {
+                        source: topicData.chosen.source || topicData.source || "News",
+                        region: topicData.region,
+                      });
+                      post = result.post;
+                      source = result.source;
+                      chosenStory = result.chosenStory;
+                      imageConcept = result.imageConcept;
+                    } else {
+                      const chosenHeadline = `${topicData.chosen.title} (Source: ${topicData.chosen.source})`;
+                      const result = await runTopicPostPipeline(chosenHeadline);
+                      post = result.post;
+                      imageConcept = result.imageConcept;
+                    }
+
+                    let primaryPost = post;
+                    const platformPosts = [];
+                    for (const platform of topicPlatforms) {
+                      const platformPost = await formatPostForPlatform(post, platform);
+                      platformPosts.push({ platform, post: platformPost });
+                      if (platform === "LinkedIn") primaryPost = platformPost;
+                      else if (primaryPost === post) primaryPost = platformPost;
+                    }
+
+                    return {
+                      success: true,
+                      index: i,
+                      topic: isAutopost ? chosenStory : topicData.chosen.title,
+                      post: primaryPost,
+                      imageConcept,
+                      platforms: topicPlatforms,
+                      platformPosts,
+                      source: isAutopost ? source : null,
+                      region: topicData.region,
+                    };
+                  } catch (err) {
+                    console.error(`❌ [multi-gen] Topic ${i + 1} failed: ${err.message}`);
+                    return { success: false, index: i, error: err.message };
+                  }
+                })
+              );
+
+              // Send results to user
+              const successfulPosts = [];
+              for (const result of generationResults) {
+                const r = result.status === "fulfilled" ? result.value : { success: false, error: result.reason?.message || "Unknown error" };
+                if (r.success) {
+                  await safeSendMessage(chatId, `\n━━━ Post ${r.index + 1}: ${r.topic} ━━━`);
+                  for (const { platform, post } of r.platformPosts) {
+                    await safeSendMessage(chatId, `📱 ${platform}:`);
+                    await sendChunked(chatId, post);
+                  }
+                  if (r.source) {
+                    await safeSendMessage(chatId, `📡 Sources: ${r.source}\n🌍 Region: ${r.region}`);
+                  }
+                  successfulPosts.push({
+                    topic: r.topic,
+                    post: r.post,
+                    imageConcept: r.imageConcept,
+                    platforms: r.platforms,
+                    source: r.source,
+                    region: r.region,
+                  });
+                } else {
+                  await safeSendMessage(chatId, `❌ Post ${r.index + 1} failed: ${r.error}`);
+                }
+              }
+
+              if (successfulPosts.length > 0) {
+                pendingMultiPostRequests[chatId] = {
+                  posts: successfulPosts,
+                  expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
+                };
+                await safeSendMessage(
+                  chatId,
+                  `\n✅ ${successfulPosts.length} post(s) ready!\n\nCommands:\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts\n• Or send general feedback to rewrite all posts`
+                );
+              }
+            }
           }
         }
 
@@ -2958,6 +3251,105 @@ app.post("/webhook", async (req, res) => {
           } else {
             delete pendingGreetingSelections[chatId];
             await triggerAutopostFlow(chatId, chosen);
+          }
+        }
+
+      } else if (pendingMultiPostRequests[chatId]) {
+        const pending = pendingMultiPostRequests[chatId];
+        if (Date.now() > pending.expiresAt) {
+          delete pendingMultiPostRequests[chatId];
+          await safeSendMessage(chatId, "⏰ Post session expired. Run the command again.");
+        } else {
+          const cmd = parseMultiPostCommand(text);
+          if (cmd) {
+            if (cmd.action === "image") {
+              if (cmd.all) {
+                // Generate images for all posts
+                await safeSendMessage(chatId, "🎨 Generating images for all posts...");
+                for (let i = 0; i < pending.posts.length; i++) {
+                  const postData = pending.posts[i];
+                  try {
+                    const imageBackgroundUrl = await callImageAPI(postData.imageConcept.visual);
+                    const imageUrl = await renderImageWithText(imageBackgroundUrl, postData.imageConcept);
+                    await sendPhoto(chatId, imageUrl, postData.post.slice(0, 1024));
+                    await safeSendMessage(chatId, `🧠 Post ${i + 1} Visual Spec\n\n${imageConceptToText(postData.imageConcept)}`);
+                  } catch (err) {
+                    console.error(`❌ [multi-image] Post ${i + 1} failed: ${err.message}`);
+                    await safeSendMessage(chatId, `❌ Image for post ${i + 1} failed: ${err.message}`);
+                  }
+                }
+              } else {
+                // Generate image for specific post
+                const postData = pending.posts[cmd.index];
+                if (!postData) {
+                  await safeSendMessage(chatId, `❌ Invalid post number. You have ${pending.posts.length} post(s).`);
+                } else {
+                  await safeSendMessage(chatId, `🎨 Generating image for post ${cmd.index + 1}...`);
+                  try {
+                    const imageBackgroundUrl = await callImageAPI(postData.imageConcept.visual);
+                    const imageUrl = await renderImageWithText(imageBackgroundUrl, postData.imageConcept);
+                    await sendPhoto(chatId, imageUrl, postData.post.slice(0, 1024));
+                    await safeSendMessage(chatId, `🧠 Post ${cmd.index + 1} Visual Spec\n\n${imageConceptToText(postData.imageConcept)}`);
+                  } catch (err) {
+                    console.error(`❌ [multi-image] Post ${cmd.index + 1} failed: ${err.message}`);
+                    await safeSendMessage(chatId, `❌ Image generation failed: ${err.message}`);
+                  }
+                }
+              }
+            } else if (cmd.action === "short") {
+              const postData = pending.posts[cmd.index];
+              if (!postData) {
+                await safeSendMessage(chatId, `❌ Invalid post number. You have ${pending.posts.length} post(s).`);
+              } else {
+                await safeSendMessage(chatId, `⏳ Making post ${cmd.index + 1} short & crisp...`);
+                try {
+                  const shortenPrompt = buildShortCrispPrompt(postData.post);
+                  const newPostRaw = await callDirectWithRetry(shortenPrompt, "short-crisp-polisher");
+                  const newPost = await enforcePostFormat(newPostRaw);
+                  postData.post = newPost;
+                  await sendChunked(chatId, `📰 Post ${cmd.index + 1} (shortened):\n\n${newPost}`);
+                  await safeSendMessage(chatId, `✅ Post ${cmd.index + 1} shortened!\n\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts`);
+                } catch (err) {
+                  console.error(`❌ [multi-short] Post ${cmd.index + 1} failed: ${err.message}`);
+                  await safeSendMessage(chatId, `❌ Shorten failed: ${err.message}`);
+                }
+              }
+            } else if (cmd.action === "rewrite") {
+              const postData = pending.posts[cmd.index];
+              if (!postData) {
+                await safeSendMessage(chatId, `❌ Invalid post number. You have ${pending.posts.length} post(s).`);
+              } else {
+                await safeSendMessage(chatId, `⏳ Rewriting post ${cmd.index + 1} based on your feedback...`);
+                try {
+                  const prompt = buildFeedbackRewritePrompt(postData.post, cmd.feedback);
+                  const rewrittenRaw = await callDirectWithRetry(prompt, "feedback-rewriter");
+                  const rewritten = await enforcePostFormat(rewrittenRaw);
+                  postData.post = rewritten;
+                  await sendChunked(chatId, `📰 Post ${cmd.index + 1} (rewritten):\n\n${rewritten}`);
+                  await safeSendMessage(chatId, `✅ Post ${cmd.index + 1} rewritten!\n\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts`);
+                } catch (err) {
+                  console.error(`❌ [multi-rewrite] Post ${cmd.index + 1} failed: ${err.message}`);
+                  await safeSendMessage(chatId, `❌ Rewrite failed: ${err.message}`);
+                }
+              }
+            }
+          } else {
+            // General feedback — rewrite ALL posts
+            await safeSendMessage(chatId, `⏳ Rewriting all ${pending.posts.length} post(s) based on your feedback...`);
+            for (let i = 0; i < pending.posts.length; i++) {
+              const postData = pending.posts[i];
+              try {
+                const prompt = buildFeedbackRewritePrompt(postData.post, text);
+                const rewrittenRaw = await callDirectWithRetry(prompt, `feedback-rewriter-all-${i}`);
+                const rewritten = await enforcePostFormat(rewrittenRaw);
+                postData.post = rewritten;
+                await sendChunked(chatId, `📰 Post ${i + 1} (rewritten):\n\n${rewritten}`);
+              } catch (err) {
+                console.error(`❌ [multi-rewrite-all] Post ${i + 1} failed: ${err.message}`);
+                await safeSendMessage(chatId, `❌ Post ${i + 1} rewrite failed: ${err.message}`);
+              }
+            }
+            await safeSendMessage(chatId, `✅ All posts rewritten!\n\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts`);
           }
         }
 
