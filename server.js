@@ -65,19 +65,6 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-const OPENCLAW_BIN = (() => {
-  if (process.env.OPENCLAW_BIN) return process.env.OPENCLAW_BIN;
-  if (process.platform === "win32") {
-    const candidates = [
-      "C:\\Users\\BIT\\AppData\\Roaming\\npm\\openclaw.cmd",
-      "C:\\Users\\BIT\\AppData\\Roaming\\npm\\openclaw.ps1",
-    ];
-    for (const c of candidates) if (fs.existsSync(c)) return c;
-    return "openclaw.cmd";
-  }
-  return "openclaw";
-})();
-
 const TELEGRAM_MAX_TEXT = 3900;
 const TELEGRAM_MAX_CAPTION = 900;
 const OPENCLAW_MAX_RETRIES = 5;
@@ -519,20 +506,6 @@ function buildNewsQuery(category, region = "Global") {
   return [category, region && region !== "Global" ? region : ""].filter(Boolean).join(" ").trim();
 }
 
-function inferCategoryFromTopic(topic) {
-  const text = String(topic || "").toLowerCase();
-  const keywordMap = [
-    { category: "fintech", keywords: ["fintech", "bank", "banking", "payments", "payment", "crypto", "invest", "investing", "stock", "stocks", "finance", "financial"] },
-    { category: "edtech", keywords: ["edtech", "education", "learning", "school", "student", "teacher", "course", "academy", "exam"] },
-    { category: "healthcare", keywords: ["health", "healthcare", "medical", "medicine", "hospital", "doctor", "nurse", "biotech"] },
-    { category: "ai", keywords: ["ai", "artificial intelligence", "openai", "gpt", "llm", "machine learning", "ml", "chatgpt", "claude", "gemini"] },
-    { category: "marketing", keywords: ["marketing", "growth", "ads", "advertising", "brand", "seo", "social media", "content"] },
-    { category: "current_affairs", keywords: ["politics", "election", "war", "geopolitics", "economy", "policy", "government"] },
-  ];
-
-  const match = keywordMap.find((entry) => entry.keywords.some((keyword) => text.includes(keyword)));
-  return match?.category || DEFAULT_CATEGORY;
-}
 
 // ─── 3. UTILITIES & STATE ───────────────────────────────────────────────────
 
@@ -558,8 +531,6 @@ const recentTopics = loadRecentTopics();
 
 // ─── FONT MANAGEMENT ───────────────────────────────────────────────────────
 
-let _fontB64 = null;
-
 async function ensureFont() {
   if (fs.existsSync(FONT_PATH)) return;
   try {
@@ -573,17 +544,6 @@ async function ensureFont() {
   } catch (err) {
     console.warn(`⚠️ Could not download font: ${err.message}. Falling back to system fonts.`);
   }
-}
-
-function getFontB64() {
-  if (!_fontB64 && fs.existsSync(FONT_PATH)) {
-    try {
-      _fontB64 = fs.readFileSync(FONT_PATH).toString("base64");
-    } catch (err) {
-      console.warn(`⚠️ Could not read font file: ${err.message}`);
-    }
-  }
-  return _fontB64;
 }
 
 function rememberTopic(topic) {
@@ -1303,34 +1263,6 @@ function escapeXml(value) {
     .replace(/'/g, "&apos;");
 }
 
-function estimateTextWidth(text, fontSize, widthFactor = 0.56) {
-  return String(text || "").length * fontSize * widthFactor;
-}
-
-function normalizeToken(value) {
-  return String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function getHighlightTerms(highlight, headline) {
-  // Deprecated, removed for layout engine
-  return [];
-}
-
-function pickFallbackHighlightTerm(lines) {
-  // Deprecated, removed for layout engine
-  return "";
-}
-
-function getHighlightMode() {
-  // Deprecated, removed for layout engine
-  return "single_word";
-}
-
-function generatePangoMarkup(imageConcept, headlineSize, subtextSize, isShadow = false) {
-  // Deprecated, removed for layout engine
-  return "";
-}
-
 async function renderImageWithText(backgroundImageUrl, imageConcept) {
   const response = await axios.get(backgroundImageUrl, {
     responseType: "arraybuffer",
@@ -1913,8 +1845,6 @@ async function callOpenRouterWithModel(model, systemPrompt, userMessage) {
   return text.trim();
 }
 
-// const OPENCLAW_MAIN = "C:\\Users\\BIT\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
-
 // LLM-powered post translator
 async function translatePostWithLLM(rawPost, targetLanguage) {
   const langMap = {
@@ -2124,11 +2054,6 @@ function looksLikeMeta(text) {
   );
 }
 
-function looksLikeAnalysis(text) {
-  const m = (text || "").toLowerCase();
-  return m.includes("the story is about") || m.includes("the trend shows");
-}
-
 function looksLikeClarification(text) {
   const m = (text || "").toLowerCase();
   return m.includes("what is your timezone") || m.includes("how should i address you");
@@ -2147,13 +2072,7 @@ async function enforcePostFormat(raw) {
   }
   processed = lines.slice(startIdx).join("\n").trim();
 
-  try {
-    const simplified = await simplifyPostWithLLM(processed);
-    return simplified || processed;
-  } catch (e) {
-    console.warn(`⚠️ [enforcePostFormat] LLM simplifier failed: ${e.message}`);
-    return processed;
-  }
+  return processed;
 }
 
 function assertPost(post, contextMsg) {
@@ -2486,6 +2405,9 @@ async function shortenAndSendPost(chatId) {
     const newPostRaw = await callDirectWithRetry(shortenPrompt, "short-crisp-polisher");
     const newPost = await enforcePostFormat(newPostRaw);
 
+    // Save revision history so users can see what changed and we don't regress.
+    if (!pending.history) pending.history = [];
+    pending.history.push({ action: "short", post: pending.post, at: Date.now() });
     pending.post = newPost;
 
     await sendChunked(chatId, newPost);
@@ -2516,10 +2438,12 @@ async function rewriteWithFeedback(chatId, feedback) {
     const rewrittenRaw = await callDirectWithRetry(prompt, "feedback-rewriter");
     const rewritten = await enforcePostFormat(rewrittenRaw);
 
+    if (!pending.history) pending.history = [];
+    pending.history.push({ action: "feedback", post: pending.post, note: feedback, at: Date.now() });
     pending.post = rewritten;
 
     await sendChunked(chatId, rewritten);
-    await safeSendMessage(chatId, "✅ Rewritten post ready!\n\nWant to make it short & crisp? Reply SHORT YES.\nWant an image? Reply YES.\nOr send more feedback to keep refining.");
+    await safeSendMessage(chatId, "✅ Rewritten post ready!\n\nWant to make it short & crisp? Reply SHORT YES or /shorten.\nWant an image? Reply YES.\nOr send more feedback to keep refining.");
   } catch (err) {
     console.error(`❌ [feedback-rewrite] Failed: ${err.message}`);
     await safeSendMessage(chatId, `❌ Rewrite failed: ${err.message}`);
@@ -2561,11 +2485,6 @@ async function generateAndSendImage(chatId) {
 }
 
 // ─── 9. TELEGRAM WEBHOOK ────────────────────────────────────────────────────
-
-function clampText(text) {
-  if (!text || text.length <= TELEGRAM_MAX_TEXT) return text;
-  return text.slice(0, TELEGRAM_MAX_TEXT) + "\n\n[truncated]";
-}
 
 function parsePlatformChoice(text) {
   const raw = String(text || "").trim().toLowerCase();
@@ -2974,7 +2893,15 @@ app.post("/webhook", async (req, res) => {
         const rawCategory = args[0] || DEFAULT_CATEGORY;
         await triggerAutopostFlow(chatId, rawCategory, args[1]);
 
-      } else if (text.toLowerCase() === "short yes" || text.toLowerCase() === "/short yes") {
+function isShortenRequest(text) {
+  const raw = String(text || "").trim().toLowerCase();
+  if (["short yes", "/short yes", "/shorten", "shorten it", "make it short", "make it shorter", "short and crisp", "make it short and crisp", "short please", "crisp", "make it crisp", "shorter"].includes(raw)) {
+    return true;
+  }
+  return /^(short|shorten|crisp|shorter)\b/.test(raw);
+}
+
+      } else if (isShortenRequest(text)) {
         await shortenAndSendPost(chatId);
 
       } else if (text.toLowerCase() === "short no" || text.toLowerCase() === "/short no") {
@@ -3306,6 +3233,8 @@ app.post("/webhook", async (req, res) => {
                   const shortenPrompt = buildShortCrispPrompt(postData.post);
                   const newPostRaw = await callDirectWithRetry(shortenPrompt, "short-crisp-polisher");
                   const newPost = await enforcePostFormat(newPostRaw);
+                  if (!postData.history) postData.history = [];
+                  postData.history.push({ action: "short", post: postData.post, at: Date.now() });
                   postData.post = newPost;
                   await sendChunked(chatId, `📰 Post ${cmd.index + 1} (shortened):\n\n${newPost}`);
                   await safeSendMessage(chatId, `✅ Post ${cmd.index + 1} shortened!\n\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts`);
@@ -3324,6 +3253,8 @@ app.post("/webhook", async (req, res) => {
                   const prompt = buildFeedbackRewritePrompt(postData.post, cmd.feedback);
                   const rewrittenRaw = await callDirectWithRetry(prompt, "feedback-rewriter");
                   const rewritten = await enforcePostFormat(rewrittenRaw);
+                  if (!postData.history) postData.history = [];
+                  postData.history.push({ action: "feedback", post: postData.post, note: cmd.feedback, at: Date.now() });
                   postData.post = rewritten;
                   await sendChunked(chatId, `📰 Post ${cmd.index + 1} (rewritten):\n\n${rewritten}`);
                   await safeSendMessage(chatId, `✅ Post ${cmd.index + 1} rewritten!\n\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts`);
@@ -3342,6 +3273,8 @@ app.post("/webhook", async (req, res) => {
                 const prompt = buildFeedbackRewritePrompt(postData.post, text);
                 const rewrittenRaw = await callDirectWithRetry(prompt, `feedback-rewriter-all-${i}`);
                 const rewritten = await enforcePostFormat(rewrittenRaw);
+                if (!postData.history) postData.history = [];
+                postData.history.push({ action: "feedback", post: postData.post, note: text, at: Date.now() });
                 postData.post = rewritten;
                 await sendChunked(chatId, `📰 Post ${i + 1} (rewritten):\n\n${rewritten}`);
               } catch (err) {
