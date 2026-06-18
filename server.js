@@ -2888,11 +2888,6 @@ app.post("/webhook", async (req, res) => {
         ).join("\n\n---\n\n");
         await sendChunked(chatId, preview);
 
-      } else if (text.toLowerCase() === "autopost" || text.startsWith("/autopost")) {
-        const args = text.split(" ").slice(1);
-        const rawCategory = args[0] || DEFAULT_CATEGORY;
-        await triggerAutopostFlow(chatId, rawCategory, args[1]);
-
 function isShortenRequest(text) {
   const raw = String(text || "").trim().toLowerCase();
   if (["short yes", "/short yes", "/shorten", "shorten it", "make it short", "make it shorter", "short and crisp", "make it short and crisp", "short please", "crisp", "make it crisp", "shorter"].includes(raw)) {
@@ -2900,6 +2895,11 @@ function isShortenRequest(text) {
   }
   return /^(short|shorten|crisp|shorter)\b/.test(raw);
 }
+
+      } else if (text.toLowerCase() === "autopost" || text.startsWith("/autopost")) {
+        const args = text.split(" ").slice(1);
+        const rawCategory = args[0] || DEFAULT_CATEGORY;
+        await triggerAutopostFlow(chatId, rawCategory, args[1]);
 
       } else if (isShortenRequest(text)) {
         await shortenAndSendPost(chatId);
