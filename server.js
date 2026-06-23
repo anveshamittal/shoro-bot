@@ -2428,9 +2428,174 @@ async function shortenAndSendPost(chatId) {
   }
 }
 
-// ─── FEEDBACK REWRITER ───────────────────────────────────────────────────────
+// ─── PENDING FEEDBACK CONFIRMATIONS ───────────────────────────────────────────
+// Keyed by chatId. Stores pending rewrite confirmations so user can approve/reject.
+const pendingFeedbackConfirmations = {};
+// { [chatId]: { postIndex, feedback, preview?, expiresAt } }
 
-async function rewriteWithFeedback(chatId, feedback) {
+// ─── PENDING FEEDBACK CLARIFICATIONS ──────────────────────────────────────────
+// Keyed by chatId. Stores clarification questions awaiting user response.
+const pendingFeedbackClarifications = {};
+// { [chatId]: { originalText, context, expiresAt } }
+
+const PENDING_CONFIRMATION_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// ─── FEEDBACK INTENT DETECTION ───────────────────────────────────────────────
+
+const CASUAL_RESPONSES = new Set([
+  "thanks", "thank you", "thx", "ty", "ok", "okay", "k", "kk",
+  "nice", "great", "awesome", "cool", "good", "perfect", "amazing",
+  "wow", "lol", "haha", "ha", "yes", "yep", "yeah", "yup", "sure",
+  "alright", "got it", "understood", "makes sense", "fine", "ok thanks",
+  "thank u", "tysm", "tyvm", "np", "no problem", "you're welcome",
+  "brilliant", "excellent", "superb", "lovely", "sweet", "fire", "lit",
+  "👍", "👏", "🙏", "❤️", "💯", "🔥", "🎉", "👌", "🙌", "✅",
+  "nice one", "well done", "good job", "gj", "gg",
+,
+  "great job", "great work", "nice work", "well played", "good stuff",
+  "love it", "loved it", "like it", "liked it", "appreciate it",
+]);
+
+const QUESTION_PATTERNS = [
+  /^(what|why|how|when|where|who|which|is|are|was|were|do|does|did|can|could|would|should|will|shall|have|has|had|am|may|might|must)\b/i,
+  /\?\s*$/, // ends with question mark
+  /^(can you|could you|would you|will you|do you|are you|is there|are there)\b/i,
+  /^(tell me|explain|show me|help me|i need|i want)\b/i,
+];
+
+const VAGUE_FEEDBACK_WORDS = new Set([
+  "better", "good", "nice", "best", "improve", "make", "change", "fix",
+  "edit", "update", "modify", "adjust", "tweak", "refine", "polish",
+  "upgrade", "enhance", "optimize", "perfect", "ideal", "great",
+  "cooler", "funnier", "sharper", "stronger", "softer", "harder",
+  "more", "less", "add", "remove", "delete", "include", "exclude",
+  "longer", "shorter", "bigger", "smaller", "deeper", "broader",
+  "professional", "casual", "formal", "friendly", "serious",
+  "emotional", "funny", "witty", "sarcastic", "bold", "subtle",
+  "engaging", "catchy", "viral", "trendy", "modern", "classic",
+  "simple", "complex", "detailed", "brief", "concise", "elaborate",
+]);
+
+function isCasualResponse(text) {
+  const raw = String(text || "").trim().toLowerCase().replace(/[^a-z0-9\s\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/gu, "");
+  if (CASUAL_RESPONSES.has(raw)) return true;
+  // Check if it's just emoji(s)
+  const emojiOnly = /^[\s\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]+$/u;
+  if (emojiOnly.test(raw)) return true;
+  return false;
+}
+
+function isQuestion(text) {
+  const raw = String(text || "").trim();
+  if (raw.endsWith("?")) return true;
+  const lower = raw.toLowerCase();
+  for (const pattern of QUESTION_PATTERNS) {
+    if (pattern.test(lower)) return true;
+  }
+  return false;
+}
+
+function isVagueFeedback(text) {
+  const raw = String(text || "").trim().toLowerCase();
+  const words = raw.split(/\s+/).filter(Boolean);
+  
+  // Very short feedback is likely vague
+  if (words.length <= 3) return true;
+  
+  // Check if most words are vague feedback words
+  const vagueCount = words.filter(w => VAGUE_FEEDBACK_WORDS.has(w.replace(/[^a-z]/g, ""))).length;
+  if (vagueCount >= Math.max(1, words.length * 0.5)) return true;
+  
+  // Check if it's just adjectives without specifics
+  const adjectivePatterns = /\b(more|less|very|too|so|really|quite|pretty|kind of|sort of)\b/g;
+  const adjectiveCount = (raw.match(adjectivePatterns) || []).length;
+  if (adjectiveCount >= 2 && words.length <= 6) return true;
+  
+  return false;
+}
+
+function detectFeedbackIntent(text) {
+  if (isCasualResponse(text)) return "casual";
+  if (isQuestion(text)) return "question";
+  if (isVagueFeedback(text)) return "vague_feedback";
+  return "specific_feedback";
+}
+
+// ─── FEEDBACK CLARIFICATION QUESTIONS ─────────────────────────────────────────
+
+function buildClarificationQuestion(originalText, context) {
+  const lower = originalText.toLowerCase().trim();
+  
+  // Check for specific vague patterns and ask targeted questions
+  if (/\b(more|less)\s+(professional|formal|casual|friendly|emotional|funny|witty|sarcastic|bold|subtle|engaging|catchy|simple|detailed|brief|concise|elaborate)\b/.test(lower)) {
+    const match = lower.match(/\b(more|less)\s+(\w+)/);
+    const direction = match[1];
+    const quality = match[2];
+    return `You want the post to be ${direction} ${quality}. Can you tell me specifically what that means? For example, should I ${direction === "more" ? "add specific examples, change the tone, or restructure sentences" : "remove certain phrases, simplify language, or make it more direct"}?`;
+  }
+  
+  if (/\b(make it|make this|make the)\b/.test(lower) && wordsCount(lower) <= 5) {
+    return `I'd love to help! "Make it" is a bit broad — could you tell me exactly what you'd like changed? For example: the tone, the length, the hook, the examples, or the ending?`;
+  }
+  
+  if (/\b(better|improve|upgrade|enhance|optimize)\b/.test(lower)) {
+    return `I want to make this better for you. What specifically feels off? Is it the tone, the length, the examples, the hook, or something else?`;
+  }
+  
+  if (/\b(add|include|put in)\b/.test(lower)) {
+    return `What would you like me to add? Specific data, examples, a different angle, or something else?`;
+  }
+  
+  if (/\b(remove|delete|exclude|take out)\b/.test(lower)) {
+    return `What should I remove? A specific phrase, section, or type of content?`;
+  }
+  
+  if (/\b(change|fix|edit|update|modify|adjust|tweak)\b/.test(lower)) {
+    return `What specifically would you like me to change? The hook, the tone, the length, the examples, or the ending?`;
+  }
+  
+  if (/\b(longer|shorter|bigger|smaller|more|less)\b/.test(lower)) {
+    return `Got it. What specifically should be ${lower.match(/\b(longer|shorter|bigger|smaller|more|less)\b/)[0]}? The whole post, or just a part (like the hook or the ending)?`;
+  }
+  
+  // Generic vague fallback
+  return `I want to make sure I apply your feedback correctly. Could you be a bit more specific about what you'd like changed? For example: the tone, the length, the hook, the examples, or the ending?`;
+}
+
+function wordsCount(text) {
+  return String(text || "").trim().split(/\s+/).filter(Boolean).length;
+}
+
+// ─── FEEDBACK REWRITE PREVIEW ─────────────────────────────────────────────────
+
+async function generateFeedbackPreview(post, feedback) {
+  const prompt = [
+    "You are a LinkedIn content editor. A user wants to rewrite a post based on feedback.",
+    "",
+    "Before rewriting, summarize what changes you will make based on the feedback.",
+    "Be specific about what will change: tone, structure, hook, examples, length, etc.",
+    "",
+    "Original Post:",
+    post,
+    "",
+    "User Feedback:",
+    feedback,
+    "",
+    "Output ONLY a 2-3 sentence preview of what you will change. No markdown, no post text, no explanation. Be concise and specific."
+  ].join("\n");
+  
+  try {
+    const preview = await callDirectWithRetry(prompt, "feedback-preview");
+    return preview.trim();
+  } catch (err) {
+    console.warn(`⚠️ [feedback-preview] Failed: ${err.message}`);
+    return `I'll rewrite the post focusing on: ${feedback}`;
+  }
+}
+
+// ─── FEEDBACK REWRITER (with confirmation flow) ───────────────────────────────
+
+async function rewriteWithFeedback(chatId, feedback, skipConfirmation = false) {
   const pending = pendingImageRequests[chatId];
   if (!pending) {
     await safeSendMessage(chatId, "⚠️ No pending post to rewrite. Run a post command first.");
@@ -2442,6 +2607,26 @@ async function rewriteWithFeedback(chatId, feedback) {
     return;
   }
 
+  // If confirmation is required, generate preview and ask user
+  if (!skipConfirmation) {
+    await safeSendMessage(chatId, "⏳ Generating preview of changes...");
+    const preview = await generateFeedbackPreview(pending.post, feedback);
+    
+    pendingFeedbackConfirmations[chatId] = {
+      postIndex: null, // single post
+      feedback,
+      preview,
+      expiresAt: Date.now() + PENDING_CONFIRMATION_TTL_MS
+    };
+    
+    await safeSendMessage(
+      chatId,
+      `📝 Here's what I'll change:\n${preview}\n\nReply YES to proceed, or NO to cancel and send different feedback.`
+    );
+    return;
+  }
+
+  // Proceed with rewrite
   await safeSendMessage(chatId, "⏳ Rewriting post based on your feedback...");
   try {
     const prompt = buildFeedbackRewritePrompt(pending.post, feedback);
@@ -2460,41 +2645,165 @@ async function rewriteWithFeedback(chatId, feedback) {
   }
 }
 
-// ─── ON-DEMAND IMAGE GENERATOR ──────────────────────────────────────────────
-
-async function generateAndSendImage(chatId) {
-  const pending = pendingImageRequests[chatId];
-
-  if (!pending) {
-    await safeSendMessage(chatId, "⚠️ No pending image request. Run /autopost or /post first.");
+async function rewriteMultiPostWithFeedback(chatId, postIndex, feedback, skipConfirmation = false) {
+  const pending = pendingMultiPostRequests[chatId];
+  if (!pending || Date.now() > pending.expiresAt) {
+    if (pending) delete pendingMultiPostRequests[chatId];
+    await safeSendMessage(chatId, "⚠️ No pending posts to rewrite. Run a post command first.");
     return;
   }
 
-  // Check expiry
-  if (Date.now() > pending.expiresAt) {
-    delete pendingImageRequests[chatId];
-    await safeSendMessage(chatId, "⏰ Image request expired (20 min limit). Run the command again.");
+  const postData = pending.posts[postIndex];
+  if (!postData) {
+    await safeSendMessage(chatId, `❌ Invalid post number. You have ${pending.posts.length} post(s).`);
     return;
   }
 
-  await safeSendMessage(chatId, "🎨 Generating image...");
+  // If confirmation is required, generate preview and ask user
+  if (!skipConfirmation) {
+    await safeSendMessage(chatId, "⏳ Generating preview of changes...");
+    const preview = await generateFeedbackPreview(postData.post, feedback);
+    
+    pendingFeedbackConfirmations[chatId] = {
+      postIndex,
+      feedback,
+      preview,
+      expiresAt: Date.now() + PENDING_CONFIRMATION_TTL_MS
+    };
+    
+    await safeSendMessage(
+      chatId,
+      `📝 Post ${postIndex + 1} — Here's what I'll change:\n${preview}\n\nReply YES to proceed, or NO to cancel and send different feedback.`
+    );
+    return;
+  }
 
+  // Proceed with rewrite
+  await safeSendMessage(chatId, `⏳ Rewriting post ${postIndex + 1} based on your feedback...`);
   try {
-    const imageBackgroundUrl = await callImageAPI(pending.imageConcept.visual);
-    const imageUrl = await renderImageWithText(imageBackgroundUrl, pending.imageConcept);
-    await sendPhoto(chatId, imageUrl, pending.post.slice(0, 1024));
-    await safeSendMessage(chatId, `🧠 Visual Spec\n\n${imageConceptToText(pending.imageConcept)}`);
-    console.log(`✅ [on-demand-image] Image generated and sent for chatId ${chatId}`);
+    const prompt = buildFeedbackRewritePrompt(postData.post, feedback);
+    const rewrittenRaw = await callDirectWithRetry(prompt, "feedback-rewriter");
+    const rewritten = await enforcePostFormat(rewrittenRaw);
+
+    if (!postData.history) postData.history = [];
+    postData.history.push({ action: "feedback", post: postData.post, note: feedback, at: Date.now() });
+    postData.post = rewritten;
+
+    await sendChunked(chatId, `📰 Post ${postIndex + 1} (rewritten):\n\n${rewritten}`);
+    await safeSendMessage(
+      chatId,
+      `✅ Post ${postIndex + 1} rewritten!\n\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts`
+    );
   } catch (err) {
-    console.error(`❌ [on-demand-image] Failed: ${err.message}`);
-    await safeSendMessage(chatId, `❌ Image generation failed: ${err.message}`);
-  } finally {
-    // Always clear pending — force user to re-run command for a fresh image
-    delete pendingImageRequests[chatId];
+    console.error(`❌ [multi-rewrite] Post ${postIndex + 1} failed: ${err.message}`);
+    await safeSendMessage(chatId, `❌ Rewrite failed: ${err.message}`);
   }
 }
 
-// ─── 9. TELEGRAM WEBHOOK ────────────────────────────────────────────────────
+async function handleMultiPostFeedback(chatId, text) {
+  const pending = pendingMultiPostRequests[chatId];
+  if (!pending || Date.now() > pending.expiresAt) {
+    if (pending) delete pendingMultiPostRequests[chatId];
+    return false;
+  }
+
+  const intent = detectFeedbackIntent(text);
+
+  // Handle casual responses gracefully
+  if (intent === "casual") {
+    await safeSendMessage(
+      chatId,
+      `😊 Glad you liked it!\n\nCommands available:\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts`
+    );
+    return true;
+  }
+
+  // Handle questions gracefully
+  if (intent === "question") {
+    await safeSendMessage(
+      chatId,
+      `❓ I see you have a question. I'm currently in post-feedback mode.\n\nTo give feedback on a post, use:\n• REWRITE <number> <feedback> — e.g. "REWRITE 1 make it more professional"\n• Or send general feedback and I'll ask which post it's for.\n\nYour question: "${text}"`
+    );
+    return true;
+  }
+
+  // For vague feedback, ask clarification first
+  if (intent === "vague_feedback") {
+    const clarification = buildClarificationQuestion(text, "multi-post");
+    pendingFeedbackClarifications[chatId] = {
+      originalText: text,
+      context: "multi-post",
+      expiresAt: Date.now() + PENDING_CONFIRMATION_TTL_MS
+    };
+    await safeSendMessage(
+      chatId,
+      `${clarification}\n\nAlso, which post is this feedback for? (Reply with the post number and your clarification, e.g. "Post 1: make the hook sharper")`
+    );
+    return true;
+  }
+
+  // For specific feedback in multi-post: ask which post first
+  await safeSendMessage(
+    chatId,
+    `📝 I received your feedback: "${text}"\n\nWhich post is this for? Reply with the post number (1-${pending.posts.length}), or say "ALL" to apply to all posts.`
+  );
+  
+  pendingFeedbackClarifications[chatId] = {
+    originalText: text,
+    context: "multi-post-select",
+    expiresAt: Date.now() + PENDING_CONFIRMATION_TTL_MS
+  };
+  return true;
+}
+
+async function handleSinglePostFeedback(chatId, text) {
+  const pending = pendingImageRequests[chatId];
+  if (!pending || Date.now() > pending.expiresAt) {
+    if (pending) delete pendingImageRequests[chatId];
+    return false;
+  }
+
+  const intent = detectFeedbackIntent(text);
+
+  // Handle casual responses gracefully
+  if (intent === "casual") {
+    await safeSendMessage(
+      chatId,
+      `😊 Thanks! Your post is ready.\n\n• Reply SHORT YES to make it short & crisp\n• Reply YES to generate an image\n• Or send more feedback to keep refining.`
+    );
+    return true;
+  }
+
+  // Handle questions gracefully
+  if (intent === "question") {
+    await safeSendMessage(
+      chatId,
+      `❓ I see you have a question. I'm currently in post-feedback mode.\n\nTo give feedback, just describe what you'd like changed (e.g., "make the hook sharper", "add more data").\n\nYour question: "${text}"`
+    );
+    return true;
+  }
+
+  // For vague feedback, ask clarification first
+  if (intent === "vague_feedback") {
+    const clarification = buildClarificationQuestion(text, "single-post");
+    pendingFeedbackClarifications[chatId] = {
+      originalText: text,
+      context: "single-post",
+      expiresAt: Date.now() + PENDING_CONFIRMATION_TTL_MS
+    };
+    await safeSendMessage(
+      chatId,
+      `${clarification}\n\nOnce you clarify, I'll show you a preview before rewriting.`
+    );
+    return true;
+  }
+
+  // Specific feedback: go through confirmation flow
+  await rewriteWithFeedback(chatId, text, false);
+  return true;
+}
+
+
 
 function parsePlatformChoice(text) {
   const raw = String(text || "").trim().toLowerCase();
@@ -3157,7 +3466,7 @@ app.post("/webhook", async (req, res) => {
                 };
                 await safeSendMessage(
                   chatId,
-                  `\n✅ ${successfulPosts.length} post(s) ready!\n\nCommands:\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts\n• Or send general feedback to rewrite all posts`
+                  `\n✅ ${successfulPosts.length} post(s) ready!\n\nCommands:\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts\n• Or send general feedback and I'll ask which post to apply it to`
                 );
               }
             }
@@ -3166,6 +3475,106 @@ app.post("/webhook", async (req, res) => {
 
       } else if (text.startsWith("/start") || text.startsWith("/help")) {
         await safeSendMessage(chatId, buildTelegramHelpText());
+
+      } else if (pendingFeedbackConfirmations[chatId]) {
+        // Handle YES/NO responses to feedback rewrite confirmations
+        const confirmation = pendingFeedbackConfirmations[chatId];
+        if (Date.now() > confirmation.expiresAt) {
+          delete pendingFeedbackConfirmations[chatId];
+          await safeSendMessage(chatId, "⏰ Confirmation expired. Please send your feedback again.");
+        } else {
+          const lowerText = text.trim().toLowerCase();
+          if (lowerText === "yes" || lowerText === "/yes" || lowerText === "y" || lowerText === "yep" || lowerText === "yeah") {
+            delete pendingFeedbackConfirmations[chatId];
+            if (confirmation.postIndex === null) {
+              // Single post
+              await rewriteWithFeedback(chatId, confirmation.feedback, true);
+            } else {
+              // Multi post
+              await rewriteMultiPostWithFeedback(chatId, confirmation.postIndex, confirmation.feedback, true);
+            }
+          } else if (lowerText === "no" || lowerText === "/no" || lowerText === "n" || lowerText === "nope" || lowerText === "cancel") {
+            delete pendingFeedbackConfirmations[chatId];
+            await safeSendMessage(
+              chatId,
+              `❌ Rewrite cancelled.\n\nSend your revised feedback when you're ready, or use the available commands.`
+            );
+          } else {
+            await safeSendMessage(
+              chatId,
+              `🤔 Please reply YES to proceed with the rewrite, or NO to cancel.\n\nPreview: ${confirmation.preview}`
+            );
+          }
+        }
+
+      } else if (pendingFeedbackClarifications[chatId]) {
+        // Handle clarification responses
+        const clarification = pendingFeedbackClarifications[chatId];
+        if (Date.now() > clarification.expiresAt) {
+          delete pendingFeedbackClarifications[chatId];
+          await safeSendMessage(chatId, "⏰ Clarification session expired. Please send your feedback again.");
+        } else {
+          delete pendingFeedbackClarifications[chatId];
+          const clarifiedText = text.trim();
+          
+          if (clarification.context === "multi-post-select") {
+            // User is responding to "which post is this for?"
+            const lowerText = clarifiedText.toLowerCase();
+            const multiPending = pendingMultiPostRequests[chatId];
+            
+            if (!multiPending || Date.now() > multiPending.expiresAt) {
+              await safeSendMessage(chatId, "⏰ Post session expired. Run the command again.");
+              return;
+            }
+            
+            if (lowerText === "all") {
+              // Apply to all posts — still go through confirmation
+              for (let i = 0; i < multiPending.posts.length; i++) {
+                await rewriteMultiPostWithFeedback(chatId, i, clarification.originalText, false);
+              }
+            } else {
+              // Try to parse a post number
+              const numMatch = clarifiedText.match(/^(?:post\s*)?(\d+)[\s:;-]/i) || clarifiedText.match(/^(\d+)$/);
+              if (numMatch) {
+                const postIndex = parseInt(numMatch[1], 10) - 1;
+                if (postIndex >= 0 && postIndex < multiPending.posts.length) {
+                  // Extract feedback after the number
+                  const feedbackParts = clarifiedText.split(/[\s:;-]/);
+                  const feedback = feedbackParts.length > 1 
+                    ? clarifiedText.replace(/^(?:post\s*)?\d+[\s:;-]*/, "").trim()
+                    : clarification.originalText;
+                  await rewriteMultiPostWithFeedback(chatId, postIndex, feedback || clarification.originalText, false);
+                } else {
+                  await safeSendMessage(chatId, `❌ Invalid post number. You have ${multiPending.posts.length} post(s). Please reply with a number between 1 and ${multiPending.posts.length}.`);
+                }
+              } else {
+                // No number found, assume it's for post 1
+                await rewriteMultiPostWithFeedback(chatId, 0, clarifiedText, false);
+              }
+            }
+          } else if (clarification.context === "multi-post") {
+            // User clarified vague feedback for multi-post
+            // Ask which post
+            const multiPending = pendingMultiPostRequests[chatId];
+            if (multiPending && Date.now() <= multiPending.expiresAt) {
+              await safeSendMessage(
+                chatId,
+                `📝 Thanks for clarifying! Now, which post is this for? Reply with the post number (1-${multiPending.posts.length}), or say "ALL".`
+              );
+              // Store the clarified text for the next step
+              pendingFeedbackClarifications[chatId] = {
+                originalText: clarifiedText,
+                context: "multi-post-select",
+                expiresAt: Date.now() + PENDING_CONFIRMATION_TTL_MS
+              };
+            } else {
+              await safeSendMessage(chatId, "⏰ Post session expired. Run the command again.");
+            }
+          } else if (clarification.context === "single-post") {
+            // User clarified vague feedback for single post — go through confirmation
+            await rewriteWithFeedback(chatId, clarifiedText, false);
+          }
+        }
 
       } else if (/^\d+$/.test(text.trim()) && pendingGreetingSelections[chatId]) {
         const pending = pendingGreetingSelections[chatId];
@@ -3246,45 +3655,16 @@ app.post("/webhook", async (req, res) => {
                 }
               }
             } else if (cmd.action === "rewrite") {
-              const postData = pending.posts[cmd.index];
-              if (!postData) {
-                await safeSendMessage(chatId, `❌ Invalid post number. You have ${pending.posts.length} post(s).`);
-              } else {
-                await safeSendMessage(chatId, `⏳ Rewriting post ${cmd.index + 1} based on your feedback...`);
-                try {
-                  const prompt = buildFeedbackRewritePrompt(postData.post, cmd.feedback);
-                  const rewrittenRaw = await callDirectWithRetry(prompt, "feedback-rewriter");
-                  const rewritten = await enforcePostFormat(rewrittenRaw);
-                  if (!postData.history) postData.history = [];
-                  postData.history.push({ action: "feedback", post: postData.post, note: cmd.feedback, at: Date.now() });
-                  postData.post = rewritten;
-                  await sendChunked(chatId, `📰 Post ${cmd.index + 1} (rewritten):\n\n${rewritten}`);
-                  await safeSendMessage(chatId, `✅ Post ${cmd.index + 1} rewritten!\n\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts`);
-                } catch (err) {
-                  console.error(`❌ [multi-rewrite] Post ${cmd.index + 1} failed: ${err.message}`);
-                  await safeSendMessage(chatId, `❌ Rewrite failed: ${err.message}`);
-                }
-              }
+              // Use confirmation flow for REWRITE commands too
+              await rewriteMultiPostWithFeedback(chatId, cmd.index, cmd.feedback, false);
             }
           } else {
-            // General feedback — rewrite ALL posts
-            await safeSendMessage(chatId, `⏳ Rewriting all ${pending.posts.length} post(s) based on your feedback...`);
-            for (let i = 0; i < pending.posts.length; i++) {
-              const postData = pending.posts[i];
-              try {
-                const prompt = buildFeedbackRewritePrompt(postData.post, text);
-                const rewrittenRaw = await callDirectWithRetry(prompt, `feedback-rewriter-all-${i}`);
-                const rewritten = await enforcePostFormat(rewrittenRaw);
-                if (!postData.history) postData.history = [];
-                postData.history.push({ action: "feedback", post: postData.post, note: text, at: Date.now() });
-                postData.post = rewritten;
-                await sendChunked(chatId, `📰 Post ${i + 1} (rewritten):\n\n${rewritten}`);
-              } catch (err) {
-                console.error(`❌ [multi-rewrite-all] Post ${i + 1} failed: ${err.message}`);
-                await safeSendMessage(chatId, `❌ Post ${i + 1} rewrite failed: ${err.message}`);
-              }
+            // Free-text feedback — use new intent-aware handler (NO longer blindly rewrites ALL)
+            const handled = await handleMultiPostFeedback(chatId, text);
+            if (!handled) {
+              // Fallback: if no multi-post session, let it fall through to single-post
+              await safeSendMessage(chatId, "⚠️ No active post session. Run a post command first.");
             }
-            await safeSendMessage(chatId, `✅ All posts rewritten!\n\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts`);
           }
         }
 
@@ -3294,7 +3674,11 @@ app.post("/webhook", async (req, res) => {
           delete pendingImageRequests[chatId];
           await safeSendMessage(chatId, "⏰ Post session expired. Run the command again.");
         } else {
-          await rewriteWithFeedback(chatId, text);
+          // Use new intent-aware handler
+          const handled = await handleSinglePostFeedback(chatId, text);
+          if (!handled) {
+            await safeSendMessage(chatId, "⚠️ No active post session. Run a post command first.");
+          }
         }
       }
     } catch (err) {
