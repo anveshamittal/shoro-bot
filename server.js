@@ -627,6 +627,16 @@ function parseMultiPostCommand(text) {
   return null;
 }
 
+function isShortenRequest(text) {
+  const raw = String(text || "").trim().toLowerCase();
+  // Explicitly reject "short no" before checking patterns
+  if (raw === "short no" || raw === "/short no") return false;
+  if (["short yes", "/short yes", "/shorten", "shorten it", "make it short", "make it shorter", "short and crisp", "make it short and crisp", "short please", "crisp", "make it crisp", "shorter"].includes(raw)) {
+    return true;
+  }
+  return /^(short|shorten|crisp|shorter)\b/.test(raw);
+}
+
 function logStage(stage, value) {
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   const clipped = text.length > 3500 ? `${text.slice(0, 3500)}\n...[truncated in logs]` : text;
@@ -2887,14 +2897,6 @@ app.post("/webhook", async (req, res) => {
           `[${h.category} / ${h.hook_type}]\n${h.text}`
         ).join("\n\n---\n\n");
         await sendChunked(chatId, preview);
-
-function isShortenRequest(text) {
-  const raw = String(text || "").trim().toLowerCase();
-  if (["short yes", "/short yes", "/shorten", "shorten it", "make it short", "make it shorter", "short and crisp", "make it short and crisp", "short please", "crisp", "make it crisp", "shorter"].includes(raw)) {
-    return true;
-  }
-  return /^(short|shorten|crisp|shorter)\b/.test(raw);
-}
 
       } else if (text.toLowerCase() === "autopost" || text.startsWith("/autopost")) {
         const args = text.split(" ").slice(1);
