@@ -1399,7 +1399,44 @@ async function fetchAutopostTopStories(category, region = "Global", queryText = 
   };
 }
 
+function extractFirstJsonObject(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
 
+  try {
+    return JSON.parse(raw);
+  } catch (_) {
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start === -1 || end === -1 || end <= start) return null;
+    try {
+      return JSON.parse(raw.slice(start, end + 1));
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+function extractFirstJsonArray(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+  } catch (_) { }
+
+  const start = raw.indexOf("[");
+  const end = raw.lastIndexOf("]");
+  if (start === -1 || end === -1 || end <= start) return null;
+
+  try {
+    const parsed = JSON.parse(raw.slice(start, end + 1));
+    return Array.isArray(parsed) ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
 
 function isTransient(err) {
   const msg = (err?.message || String(err)).toLowerCase();
