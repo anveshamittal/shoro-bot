@@ -2055,14 +2055,33 @@ async function runResearchPipeline(topic) {
 // ─── SHORT & CRISP GENERATOR ────────────────────────────────────────────────
 
 async function shortenAndSendPost(chatId) {
-  const pending = pendingImageRequests[chatId];
+  // Check single-post first
+  let pending = pendingImageRequests[chatId];
+  let isMultiPost = false;
+  
+  if (!pending) {
+    // Check multi-post
+    pending = pendingMultiPostRequests[chatId];
+    if (pending) isMultiPost = true;
+  }
+  
   if (!pending) {
     await safeSendMessage(chatId, "⚠️ No pending post to shorten. Run a post command first.");
     return;
   }
   if (Date.now() > pending.expiresAt) {
-    delete pendingImageRequests[chatId];
+    if (isMultiPost) delete pendingMultiPostRequests[chatId];
+    else delete pendingImageRequests[chatId];
     await safeSendMessage(chatId, "⏰ Post session expired. Run the command again.");
+    return;
+  }
+
+  if (isMultiPost) {
+    // Multi-post: need to ask which post to shorten
+    await safeSendMessage(
+      chatId,
+      `You have ${pending.posts.length} posts. Which one should I shorten? Reply with SHORT <number> (e.g. SHORT 1).`
+    );
     return;
   }
 
@@ -2390,7 +2409,7 @@ async function rewriteMultiPostWithFeedback(chatId, postIndex, feedback, skipCon
     await sendChunked(chatId, `📰 Post ${postIndex + 1} (rewritten):\n\n${rewritten}`);
     await safeSendMessage(
       chatId,
-      `✅ Post ${postIndex + 1} rewritten!\n\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts`
+      `✅ Post ${postIndex + 1} rewritten!\n\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp`
     );
   } catch (err) {
     console.error(`❌ [multi-rewrite] Post ${postIndex + 1} failed: ${err.message}`);
@@ -2738,7 +2757,7 @@ app.post("/webhook", async (req, res) => {
           
           expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
         };
-        await safeSendMessage(chatId, "✅ Post ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
+        await safeSendMessage(chatId, "✅ Post ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.");
 
       } else if (text.startsWith("/language ")) {
         const langCode = text.replace("/language", "").trim().toLowerCase();
@@ -2804,7 +2823,7 @@ app.post("/webhook", async (req, res) => {
           const { post, imageConcept } = await runTopicPostPipeline(topic);
           await sendChunked(chatId, post);
           pendingImageRequests[chatId] = { topic, post,  expiresAt: Date.now() + PENDING_IMAGE_TTL_MS };
-          await safeSendMessage(chatId, "✅ Post ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
+          await safeSendMessage(chatId, "✅ Post ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.");
         } else {
           // Show numbered headlines for user to pick
           const list = headlines.map((h, i) =>
@@ -2869,6 +2888,100 @@ app.post("/webhook", async (req, res) => {
         const args = text.split(" ").slice(1);
         const rawCategory = args[0] || DEFAULT_CATEGORY;
         await triggerAutopostFlow(chatId, rawCategory, args[1]);
+
+      } else if (pendingFeedbackClarifications[chatId]) {
+        // User is responding to a clarification question
+        const clarification = pendingFeedbackClarifications[chatId];
+        if (Date.now() > clarification.expiresAt) {
+          delete pendingFeedbackClarifications[chatId];
+          await safeSendMessage(chatId, "⏰ Clarification expired. Send your feedback again.");
+        } else {
+          delete pendingFeedbackClarifications[chatId];
+          const userResponse = text.trim();
+          
+          // Combine original feedback with user's clarification
+          const combinedFeedback = `${clarification.originalText} — ${userResponse}`;
+          
+          if (clarification.context === "single-post") {
+            // Single-post clarification: route to rewrite with confirmation
+            await rewriteWithFeedback(chatId, combinedFeedback, false);
+          } else if (clarification.context === "multi-post") {
+            // Multi-post vague clarification: user should have included post number
+            // Try to extract a post number from their response
+            const postNumMatch = userResponse.match(/(?:post\s*)?(\d+)/);
+            if (postNumMatch) {
+              const postIndex = parseInt(postNumMatch[1], 10) - 1;
+              const pending = pendingMultiPostRequests[chatId];
+              if (pending && postIndex >= 0 && postIndex < pending.posts.length) {
+                await rewriteMultiPostWithFeedback(chatId, postIndex, combinedFeedback, false);
+              } else {
+                await safeSendMessage(chatId, `❌ Invalid post number. You have ${pending ? pending.posts.length : 0} post(s).`);
+              }
+            } else {
+              // No post number found — ask again more clearly
+              await safeSendMessage(
+                chatId,
+                `I need to know which post you're referring to. Please reply with the post number (1-${pendingMultiPostRequests[chatId]?.posts.length || "?"}) and your clarification.`
+              );
+            }
+          } else if (clarification.context === "multi-post-select") {
+            // Multi-post specific feedback: user is telling us which post
+            const postNumMatch = userResponse.match(/(?:post\s*)?(\d+)/);
+            if (postNumMatch) {
+              const postIndex = parseInt(postNumMatch[1], 10) - 1;
+              const pending = pendingMultiPostRequests[chatId];
+              if (pending && postIndex >= 0 && postIndex < pending.posts.length) {
+                await rewriteMultiPostWithFeedback(chatId, postIndex, clarification.originalText, false);
+              } else {
+                await safeSendMessage(chatId, `❌ Invalid post number. You have ${pending ? pending.posts.length : 0} post(s).`);
+              }
+            } else if (/^all$/i.test(userResponse)) {
+              // Apply to ALL posts
+              const pending = pendingMultiPostRequests[chatId];
+              if (pending) {
+                for (let i = 0; i < pending.posts.length; i++) {
+                  await rewriteMultiPostWithFeedback(chatId, i, clarification.originalText, false);
+                }
+              }
+            } else {
+              await safeSendMessage(
+                chatId,
+                `Please reply with the post number (1-${pendingMultiPostRequests[chatId]?.posts.length || "?"}) or "ALL" to apply to all posts.`
+              );
+            }
+          }
+        }
+
+      } else if (pendingFeedbackConfirmations[chatId]) {
+        // User is responding to a rewrite confirmation (YES/NO)
+        const confirmation = pendingFeedbackConfirmations[chatId];
+        if (Date.now() > confirmation.expiresAt) {
+          delete pendingFeedbackConfirmations[chatId];
+          await safeSendMessage(chatId, "⏰ Confirmation expired. Send your feedback again.");
+        } else {
+          const response = text.trim().toLowerCase();
+          if (response === "yes" || response === "y" || response === "yep" || response === "yeah") {
+            delete pendingFeedbackConfirmations[chatId];
+            if (confirmation.postIndex === null) {
+              // Single-post confirmation
+              await rewriteWithFeedback(chatId, confirmation.feedback, true);
+            } else {
+              // Multi-post confirmation
+              await rewriteMultiPostWithFeedback(chatId, confirmation.postIndex, confirmation.feedback, true);
+            }
+          } else if (response === "no" || response === "n" || response === "nope" || response === "nah") {
+            delete pendingFeedbackConfirmations[chatId];
+            await safeSendMessage(
+              chatId,
+              `Okay, rewrite cancelled. Send different feedback when you're ready.`
+            );
+          } else {
+            await safeSendMessage(
+              chatId,
+              `Please reply YES to proceed with the rewrite, or NO to cancel.`
+            );
+          }
+        }
 
       } else if (isShortenRequest(text)) {
         await shortenAndSendPost(chatId);
@@ -3019,7 +3132,7 @@ app.post("/webhook", async (req, res) => {
               expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
             };
             delete pendingPlatformSelections[chatId];
-            await safeSendMessage(chatId, "✅ Posts ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
+            await safeSendMessage(chatId, "✅ Posts ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.");
           } else if (pending.flow === "topic-multi" || pending.flow === "autopost-multi") {
             // Multi-topic flow: collect platforms for current topic, then ask for next
             pending.platformsSoFar.push(platforms);
