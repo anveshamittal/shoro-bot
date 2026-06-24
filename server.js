@@ -8,8 +8,6 @@ const { spawn } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const sharp = require("sharp");
-const FormData = require("form-data");
 
 const app = express();
 app.use(express.json());
@@ -25,10 +23,10 @@ process.on("uncaughtException", (err) => {
 // ─── 1. CONFIGURATION & CONSTANTS ───────────────────────────────────────────
 let isPipelineRunning = false;
 
-// ─── PENDING IMAGE REQUESTS ──────────────────────────────────────────────────
-// Keyed by chatId. Stores data needed to generate image on user's YES reply.
+// ─── PENDING POST REQUESTS ──────────────────────────────────────────────────
+// Keyed by chatId. Stores the latest generated post for feedback/rewrite.
 const pendingImageRequests = {};
-// { [chatId]: { topic, post, imageConcept, expiresAt } }
+// { [chatId]: { topic, post, expiresAt } }
 
 const PENDING_IMAGE_TTL_MS = 20 * 60 * 1000; // 20 minutes — auto-expire stale requests
 
@@ -50,14 +48,12 @@ const pendingGreetingSelections = {};
 // { [chatId]: { options: [string], expiresAt } }
 
 // ─── PENDING MULTI-POST REQUESTS ──────────────────────────────────────────────
-// Keyed by chatId. Stores multiple generated posts for combined feedback/image.
+// Keyed by chatId. Stores multiple generated posts for combined feedback.
 const pendingMultiPostRequests = {};
-// { [chatId]: { posts: [{topic, post, imageConcept, platforms, source, region}], expiresAt } }
+// { [chatId]: { posts: [{topic, post, platforms, source, region}], expiresAt } }
 
 const PENDING_TOPIC_TTL_MS = 40 * 60 * 1000; // 40 minutes to pick a headline
 
-// Optimize sharp for production memory usage
-sharp.cache(false);
 
 const TOKEN = process.env.TELEGRAM_TOKEN;
 if (!TOKEN) {
@@ -73,9 +69,7 @@ const RECENT_TOPICS_LIMIT = 10;
 const OR_MODEL = process.env.OR_MODEL || "openai/gpt-4o-mini";
 const OR_API_KEY = process.env.OPENROUTER_API_KEY || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const OPENAI_IMAGE_MODEL = process.env.OPENAI_IMAGE_MODEL || "dall-e-3";
-const OPENAI_IMAGE_SIZE = process.env.OPENAI_IMAGE_SIZE || "1024x1024";
-const FONT_PATH = path.join(os.tmpdir(), "overlay-font-anton.ttf");
+
 const OPENCLAW_MAIN = (() => {
   if (process.env.OPENCLAW_MAIN) return process.env.OPENCLAW_MAIN;
   const candidates = [
@@ -458,9 +452,9 @@ function buildTelegramHelpText() {
     "",
     "After /post or /autopost: reply with numbers to choose stories. You can pick multiple: '1,3,5' or 'all'.",
     "After choosing stories: pick platform(s) for each — e.g. X, Facebook, LinkedIn (or 1/2/3). You can pick multiple: 'LinkedIn X', '1,2', 'all'.",
-    "After posts are ready: reply with feedback to rewrite, SHORT <number> to shorten, IMAGE <number>/ALL for images.",
+    "After posts are ready: reply with feedback to rewrite, SHORT <number> to shorten.",
     "Translate any post: /language <code> — e.g. /language te (Telugu), /language hi (Hindi), /language ta (Tamil).",
-    "Images expire in 20 min, news selection expires in 40 min."
+    "Posts expire in 20 min, news selection expires in 40 min."
   ].join("\n");
 }
 
@@ -529,23 +523,6 @@ function saveRecentTopics(topics) {
 
 const recentTopics = loadRecentTopics();
 
-// ─── FONT MANAGEMENT ───────────────────────────────────────────────────────
-
-async function ensureFont() {
-  if (fs.existsSync(FONT_PATH)) return;
-  try {
-    console.log("📦 Downloading overlay font...");
-    const res = await axios.get(
-      "https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf",
-      { responseType: "arraybuffer", timeout: 30000 }
-    );
-    fs.writeFileSync(FONT_PATH, Buffer.from(res.data));
-    console.log("✅ Overlay font ready.");
-  } catch (err) {
-    console.warn(`⚠️ Could not download font: ${err.message}. Falling back to system fonts.`);
-  }
-}
-
 function rememberTopic(topic) {
   const key = normalizeTopic(topic);
   if (!key) return;
@@ -598,17 +575,8 @@ function formatPlatformQuestion(topicTitle, topicIndex, total) {
 function parseMultiPostCommand(text) {
   const lower = String(text || "").trim().toLowerCase();
 
-  // "image 1" → { action: "image", index: 0 }
-  // "image all" → { action: "image", all: true }
   // "rewrite 2 make it shorter" → { action: "rewrite", index: 1, feedback: "make it shorter" }
   // "short 3" → { action: "short", index: 2 }
-  // "yes" → { action: "image", index: 0 } (backward compat)
-
-  const imageMatch = lower.match(/^image\s+(\d+|all)$/);
-  if (imageMatch) {
-    if (imageMatch[1] === "all") return { action: "image", all: true };
-    return { action: "image", index: parseInt(imageMatch[1], 10) - 1 };
-  }
 
   const rewriteMatch = lower.match(/^rewrite\s+(\d+)\s+(.+)$/);
   if (rewriteMatch) {
@@ -618,10 +586,6 @@ function parseMultiPostCommand(text) {
   const shortMatch = lower.match(/^short\s+(\d+)$/);
   if (shortMatch) {
     return { action: "short", index: parseInt(shortMatch[1], 10) - 1 };
-  }
-
-  if (lower === "yes" || lower === "/yes") {
-    return { action: "image", index: 0 };
   }
 
   return null;
@@ -1117,332 +1081,6 @@ function buildFeedbackRewritePrompt(post, feedback) {
     "- Maintain the operator voice: observant, grounded, concise, slightly opinionated.",
     "- Keep the same general length (don't make it dramatically shorter or longer unless asked).",
     "- Output ONLY the rewritten post. No introduction, no explanation, no markdown formatting."
-  ].join("\n");
-}
-
-// AGENT 7: IMAGE CONCEPT STRATEGIST (Designs viral visuals for posts)
-function buildImageConceptPrompt(topic, post) {
-  const styles = [
-    "EDITORIAL MAGAZINE COVER (Clean, striking, professional photography)",
-    "STARTUP VISUAL ESSAY (Minimalist, structured, data-driven feel)",
-    "BRUTALIST DESIGN (Bold typography, high contrast, raw unpolished aesthetic)",
-    "MINIMALIST DIAGRAM (Clean lines, geometric, conceptual clarity)",
-    "PRODUCT-FOCUSED COMPOSITION (Sleek, close-up, premium tech feel)",
-    "DOCUMENTARY-STYLE REALISM (Gritty, authentic, unfiltered office or street scene)",
-    "MODERNIST ABSTRACT (Simple shapes, depth, light-vs-dark, professional mystery)",
-    "NORDIC / CLEAN (Soft light, cold tones, high-end professional atmosphere)"
-  ];
-  const style = styles[Math.floor(Math.random() * styles.length)];
-
-  return [
-    "You are a Viral Poster Agent. Design a UNIQUE, high-impact LinkedIn infographic poster concept.",
-    "",
-    `MANDATORY ART STYLE: ${style}`,
-    "",
-    `TOPIC: ${topic}`,
-    `POST CONTENT: ${post}`,
-    "",
-    "IMPORTANT VISUAL RULES:",
-    "- scene: Clean, editorial, or documentary-style visual that represents the post topic without sci-fi overload.",
-    "- metaphor: Keep it grounded. Use realistic or minimalist metaphors. DO NOT use epic cinematic glowing portals or oversaturated cyberpunk scenes.",
-    "- detail: Make the environment professional and striking (e.g., minimalist office elements, abstract geometric shapes, high-end editorial photography).",
-    "- composition: Strong central subject, clear negative space at the top and bottom for text overlay.",
-    "- lighting: Natural, editorial, or studio lighting. Avoid excessive neon or volumetric fog.",
-    "IMPORTANT:",
-    "- NO TEXT, no typography, no letters, no words, no UI panels, no floating labels.",
-    "- The image must be a text-free, highly detailed background artwork.",
-    "- no over-designed poster elements",
-    "",
-    "IMPORTANT TEXT OVERLAY RULES (Golden Rule: Image = Emotion, Text = Message):",
-    "Generate structured text blocks for the poster layout:",
-    "- hook: Big Hook for the top (e.g. 'KPMG JUST SAID IT OUT LOUD')",
-    "- number: Core Claim for the middle (e.g. '2-3 YEARS')",
-    "- contrast: Subtext or contrast to support the number (e.g. 'OF JOB LEFT')",
-    "- cta: Call to action for the bottom (e.g. 'CHOOSE YOUR CAREER WISELY')",
-    "",
-    "Return ONLY valid JSON in exactly this shape:",
-    '{"hook":"...","number":"...","contrast":"...","cta":"...","visual":"..."}',
-    "",
-    "No markdown. No code fences. JSON only."
-  ].join("\n");
-}
-
-async function callImageAPI(prompt) {
-  if (OPENAI_API_KEY) {
-    try {
-      console.log(`🎨 Calling OpenAI image model (${OPENAI_IMAGE_MODEL})...`);
-      const response = await axios.post(
-        "https://api.openai.com/v1/images/generations",
-        {
-          model: OPENAI_IMAGE_MODEL,
-          prompt: `${prompt}, no text, no letters, no typography, no logo, no watermark`,
-          size: OPENAI_IMAGE_SIZE,
-          quality: "standard",
-          n: 1
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${OPENAI_API_KEY}`,
-            "Content-Type": "application/json"
-          },
-          timeout: 120000
-        }
-      );
-
-      const imageData = response.data?.data?.[0] || {};
-      if (imageData.url) return imageData.url;
-
-      if (imageData.b64_json) {
-        const outputPath = path.join(os.tmpdir(), `openai-image-${Date.now()}.png`);
-        fs.writeFileSync(outputPath, Buffer.from(imageData.b64_json, "base64"));
-        return outputPath;
-      }
-
-      throw new Error("OpenAI image response did not include a usable image");
-    } catch (err) {
-      console.warn(`⚠️ OpenAI image generation failed, falling back to Pollinations: ${err.message}`);
-    }
-  }
-
-  console.log("🎨 Calling Pollinations.ai for image...");
-  const safePrompt = `${prompt}, no text, no letters, no typography, no logo, no watermark`;
-  const cleanedPrompt = encodeURIComponent(safePrompt.replace(/[\n\r]/g, " ").trim());
-  const seed = Math.floor(Math.random() * 1000000);
-  return `https://image.pollinations.ai/prompt/${cleanedPrompt}?width=1024&height=1024&nologo=true&seed=${seed}`;
-}
-
-
-
-function extractFirstJsonObject(text) {
-  const raw = String(text || "").trim();
-  if (!raw) return null;
-
-  try {
-    return JSON.parse(raw);
-  } catch (_) {
-    const start = raw.indexOf("{");
-    const end = raw.lastIndexOf("}");
-    if (start === -1 || end === -1 || end <= start) return null;
-    try {
-      return JSON.parse(raw.slice(start, end + 1));
-    } catch (_) {
-      return null;
-    }
-  }
-}
-
-function extractFirstJsonArray(text) {
-  const raw = String(text || "").trim();
-  if (!raw) return null;
-
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed;
-  } catch (_) { }
-
-  const start = raw.indexOf("[");
-  const end = raw.lastIndexOf("]");
-  if (start === -1 || end === -1 || end <= start) return null;
-
-  try {
-    const parsed = JSON.parse(raw.slice(start, end + 1));
-    return Array.isArray(parsed) ? parsed : null;
-  } catch (_) {
-    return null;
-  }
-}
-
-function normalizeImageConcept(rawConcept, topic) {
-  const parsed = extractFirstJsonObject(rawConcept) || {};
-
-  const hook = String(parsed.hook || "INDUSTRY REALITY CHECK").replace(/\s+/g, " ").trim().slice(0, 100).toUpperCase();
-  const number = String(parsed.number || "").replace(/\s+/g, " ").trim().slice(0, 40).toUpperCase();
-  const contrast = String(parsed.contrast || "").replace(/\s+/g, " ").trim().slice(0, 80).toUpperCase();
-  const cta = String(parsed.cta || "CHOOSE WISELY").replace(/\s+/g, " ").trim().slice(0, 60).toUpperCase();
-  const visual = String(parsed.visual || `cinematic editorial portrait background, moody lighting, shallow depth of field, startup office atmosphere, no text elements`).replace(/\s+/g, " ").trim();
-
-  return { hook, number, contrast, cta, visual };
-}
-
-function escapeXml(value) {
-  return String(value || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-}
-
-async function renderImageWithText(backgroundImageUrl, imageConcept) {
-  const response = await axios.get(backgroundImageUrl, {
-    responseType: "arraybuffer",
-    timeout: 45000,
-  });
-
-  const background = Buffer.from(response.data);
-  const metadata = await sharp(background).metadata();
-  const width = metadata.width || 1024;
-  const height = metadata.height || 1024;
-
-  const textWidth = Math.round(width * 0.92);
-  const shadowOffset = Math.max(2, Math.round(width * 0.005));
-
-  async function createTextBuffer(text, fontSize, color, isShadow) {
-    if (!text) return null;
-    const escaped = escapeXml(text);
-    const textColor = isShadow ? "black" : color;
-    const markup = `<span font="Anton ${fontSize}" letter_spacing="-1024" foreground="${textColor}">${escaped}</span>`;
-    return sharp({
-      text: {
-        text: markup,
-        width: textWidth,
-        align: 'center',
-        rgba: true,
-        fontfile: FONT_PATH
-      }
-    }).png().toBuffer();
-  }
-
-  // 1. RANDOM SIZE SCALE
-  const headlineScale = [0.055, 0.06, 0.065];
-  const scale = headlineScale[Math.floor(Math.random() * headlineScale.length)];
-
-  const hookSize = Math.round(width * (scale * 1.2));
-  const numberSize = Math.round(width * (scale * 2.2));
-  const contrastSize = Math.round(width * (scale * 0.9));
-  const ctaSize = Math.round(width * (scale * 0.75));
-
-  // 2. RANDOM COLOR PALETTE
-  const palettes = [
-    ["#fbbf24", "#ffffff"], // gold + white
-    ["#3b82f6", "#ffffff"], // electric blue + white
-    ["#10b981", "#ffffff"], // emerald green + white
-    ["#ec4899", "#ffffff"], // neon pink + white
-    ["#8b5cf6", "#ffffff"], // cyber purple + white
-    ["#ef4444", "#ffffff"], // bold red + white
-    ["#06b6d4", "#ffffff"], // cyan + white
-    ["#f97316", "#ffffff"], // intense orange + white
-  ];
-  const [highlightColor, textColor] = palettes[Math.floor(Math.random() * palettes.length)];
-
-  const hookBuf = await createTextBuffer(imageConcept.hook, hookSize, textColor, false);
-  const hookShadow = await createTextBuffer(imageConcept.hook, hookSize, textColor, true);
-
-  const numberBuf = await createTextBuffer(imageConcept.number, numberSize, highlightColor, false);
-  const numberShadow = await createTextBuffer(imageConcept.number, numberSize, highlightColor, true);
-
-  const contrastBuf = await createTextBuffer(imageConcept.contrast, contrastSize, textColor, false);
-  const contrastShadow = await createTextBuffer(imageConcept.contrast, contrastSize, textColor, true);
-
-  const ctaBuf = await createTextBuffer(imageConcept.cta, ctaSize, highlightColor, false);
-  const ctaShadow = await createTextBuffer(imageConcept.cta, ctaSize, highlightColor, true);
-
-  const hookMeta = hookBuf ? await sharp(hookBuf).metadata() : { height: 0, width: 0 };
-  const numberMeta = numberBuf ? await sharp(numberBuf).metadata() : { height: 0, width: 0 };
-  const contrastMeta = contrastBuf ? await sharp(contrastBuf).metadata() : { height: 0, width: 0 };
-  const ctaMeta = ctaBuf ? await sharp(ctaBuf).metadata() : { height: 0, width: 0 };
-
-  const gap = Math.round(height * 0.015);
-
-  // Calculate total block height
-  let totalHeight = 0;
-  if (hookBuf) totalHeight += hookMeta.height + gap;
-  if (numberBuf) totalHeight += numberMeta.height + gap;
-  if (contrastBuf) totalHeight += contrastMeta.height + gap;
-  if (ctaBuf) totalHeight += ctaMeta.height + gap;
-  if (totalHeight > 0) totalHeight -= gap; // remove last gap
-
-  // 3. RANDOM POSITION LOGIC (top, center, bottom)
-  const positions = ["bottom", "center", "top"];
-  const position = positions[Math.floor(Math.random() * positions.length)];
-
-  const paddingY = Math.round(height * 0.08);
-
-  let startY;
-  if (position === "bottom") {
-    startY = height - totalHeight - paddingY;
-  } else if (position === "center") {
-    startY = Math.round((height - totalHeight) / 2);
-  } else {
-    startY = paddingY;
-  }
-
-  const composites = [];
-
-  let gradientSvg = "";
-  if (position === "bottom") {
-    gradientSvg = `
-<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="30%" stop-color="rgba(0,0,0,0)"/>
-      <stop offset="100%" stop-color="rgba(0,0,0,0.85)"/>
-    </linearGradient>
-  </defs>
-  <rect x="0" y="0" width="${width}" height="${height}" fill="url(#fade)"/>
-</svg>`;
-  } else if (position === "top") {
-    gradientSvg = `
-<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="rgba(0,0,0,0.85)"/>
-      <stop offset="70%" stop-color="rgba(0,0,0,0)"/>
-    </linearGradient>
-  </defs>
-  <rect x="0" y="0" width="${width}" height="${height}" fill="url(#fade)"/>
-</svg>`;
-  } else {
-    gradientSvg = `
-<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-  <rect x="0" y="0" width="${width}" height="${height}" fill="rgba(0,0,0,0.4)"/>
-</svg>`;
-  }
-
-  composites.push({ input: Buffer.from(gradientSvg), top: 0, left: 0 });
-
-  let currentY = startY;
-  const elements = [];
-
-  if (hookBuf) {
-    elements.push({ buf: hookBuf, shadow: hookShadow, y: currentY, meta: hookMeta });
-    currentY += hookMeta.height + gap;
-  }
-  if (numberBuf) {
-    elements.push({ buf: numberBuf, shadow: numberShadow, y: currentY, meta: numberMeta });
-    currentY += numberMeta.height + gap;
-  }
-  if (contrastBuf) {
-    elements.push({ buf: contrastBuf, shadow: contrastShadow, y: currentY, meta: contrastMeta });
-    currentY += contrastMeta.height + gap;
-  }
-  if (ctaBuf) {
-    elements.push({ buf: ctaBuf, shadow: ctaShadow, y: currentY, meta: ctaMeta });
-  }
-
-  for (const el of elements) {
-    const left = Math.round((width - (el.meta.width || textWidth)) / 2);
-    composites.push({ input: el.shadow, top: el.y + shadowOffset, left: left + shadowOffset });
-    composites.push({ input: el.buf, top: el.y, left: left });
-  }
-
-  const outputPath = path.join(os.tmpdir(), `shoro-render-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`);
-
-  await sharp(background)
-    .composite(composites)
-    .jpeg({ quality: 92, mozjpeg: true })
-    .toFile(outputPath);
-
-  return outputPath;
-}
-
-function imageConceptToText(imageConcept) {
-  return [
-    `Hook: ${imageConcept.hook}`,
-    `Number: ${imageConcept.number || "-"}`,
-    `Contrast: ${imageConcept.contrast || "-"}`,
-    `CTA: ${imageConcept.cta || "-"}`,
-    `Visual: ${imageConcept.visual}`,
   ].join("\n");
 }
 
@@ -2229,16 +1867,10 @@ async function buildAutopostPost(chosenStory, { source = "Google News", region =
   const polisherPrompt = buildPostPolisherPrompt(rawPost);
   const post = await callDirectWithRetry(polisherPrompt, "post-polisher");
 
-  console.log("🎨 Preparing image concept (image deferred until user confirms)...");
-  const imageConceptPrompt = buildImageConceptPrompt(story, post);
-  const imageConceptRaw = await callDirectWithRetry(imageConceptPrompt, "image-concept");
-  const imageConcept = normalizeImageConcept(imageConceptRaw, story);
-
   assertPost(post, "autopost");
   rememberTopic(story);
   logStage("FINAL_POST", post);
-  logStage("IMAGE_CONCEPT", imageConcept);
-  return { post, source, chosenStory: story, imageConcept };
+  return { post, source, chosenStory: story };
 }
 
 async function runGeneratePipeline() {
@@ -2341,17 +1973,10 @@ async function runTopicPostPipeline(topic) {
   const polisherPrompt = buildPostPolisherPrompt(rawPost);
   const post = await callDirectWithRetry(polisherPrompt, "topic-polisher");
 
-  // Build image concept but defer actual image generation
-  console.log("🎨 Preparing image concept (image deferred until user confirms)...");
-  const imageConceptPrompt = buildImageConceptPrompt(topic, post);
-  const imageConceptRaw = await callDirectWithRetry(imageConceptPrompt, "image-concept-manual");
-  const imageConcept = normalizeImageConcept(imageConceptRaw, topic);
-
   assertPost(post, "topic-post");
   rememberTopic(topic);
   logStage("FINAL_POST", post);
-  logStage("IMAGE_CONCEPT", imageConcept);
-  return { post, imageConcept };
+  return { post };
 }
 
 async function runResearchPipeline(topic) {
@@ -2378,12 +2003,6 @@ async function runResearchPipeline(topic) {
   const socialPost = socialSectionMatch ? socialSectionMatch[1].trim() : "Social post generation failed.";
   const researchBrief = fullResponse.replace(/## SOCIAL POSTS[\s\S]*?(?=## DISTRIBUTION|$)/i, "✅ *Social Posts generated below*").trim();
 
-  // Build image concept but defer image generation
-  console.log("🎨 Preparing image concept (image deferred until user confirms)...");
-  const imageConceptPrompt = buildImageConceptPrompt(topic, socialPost);
-  const imageConceptRaw = await callDirectWithRetry(imageConceptPrompt, "image-concept-research");
-  const imageConcept = normalizeImageConcept(imageConceptRaw, topic);
-
   rememberTopic(topic);
   logStage("CONTENT_BRIEF", researchBrief);
 
@@ -2391,7 +2010,6 @@ async function runResearchPipeline(topic) {
     post: socialPost,
     analysis: "📊 Content Brief Analysis Complete.",
     sources: researchBrief,
-    imageConcept
   };
 }
 
@@ -2421,7 +2039,7 @@ async function shortenAndSendPost(chatId) {
     pending.post = newPost;
 
     await sendChunked(chatId, newPost);
-    await safeSendMessage(chatId, "✅ Shortened post ready!\n\nWant an image? Reply YES to generate it.\n\nOr send feedback to rewrite it further.");
+    await safeSendMessage(chatId, "✅ Shortened post ready!\n\nOr send feedback to rewrite it further.");
   } catch (err) {
     console.error(`❌ [shorten-post] Failed: ${err.message}`);
     await safeSendMessage(chatId, `❌ Rewrite failed: ${err.message}`);
@@ -2638,7 +2256,7 @@ async function rewriteWithFeedback(chatId, feedback, skipConfirmation = false) {
     pending.post = rewritten;
 
     await sendChunked(chatId, rewritten);
-    await safeSendMessage(chatId, "✅ Rewritten post ready!\n\nWant to make it short & crisp? Reply SHORT YES or /shorten.\nWant an image? Reply YES.\nOr send more feedback to keep refining.");
+    await safeSendMessage(chatId, "✅ Rewritten post ready!\n\nWant to make it short & crisp? Reply SHORT YES or /shorten.\nOr send more feedback to keep refining.");
   } catch (err) {
     console.error(`❌ [feedback-rewrite] Failed: ${err.message}`);
     await safeSendMessage(chatId, `❌ Rewrite failed: ${err.message}`);
@@ -2955,45 +2573,6 @@ async function sendChunked(chatId, text) {
   }
 }
 
-async function sendPhoto(chatId, photoUrl, caption) {
-  try {
-    const textStr = String(caption || "");
-    const captionToUse = textStr.length <= TELEGRAM_MAX_CAPTION ? textStr : "";
-
-    const isRemoteUrl = /^https?:\/\//i.test(String(photoUrl || ""));
-    if (isRemoteUrl) {
-      await axios.post(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, {
-        chat_id: chatId,
-        photo: photoUrl,
-        caption: captionToUse
-      });
-    } else {
-      const form = new FormData();
-      form.append("chat_id", String(chatId));
-      form.append("caption", captionToUse);
-      form.append("photo", fs.createReadStream(photoUrl));
-
-      await axios.post(`https://api.telegram.org/bot${TOKEN}/sendPhoto`, form, {
-        headers: form.getHeaders(),
-        maxBodyLength: Infinity,
-        timeout: 30000,
-      });
-
-      try {
-        fs.unlink(photoUrl, () => { });
-      } catch (_) { }
-    }
-
-    // If the text is too long for a caption, send it as a separate full message
-    if (textStr.length > TELEGRAM_MAX_CAPTION) {
-      await sendChunked(chatId, textStr);
-    }
-  } catch (err) {
-    console.error(`Telegram sendPhoto failed: ${err.message}`);
-    await sendChunked(chatId, `🖼️ Image: ${photoUrl}\n\n${caption}`);
-  }
-}
-
 async function triggerAutopostFlow(chatId, rawCategory, regionArg = null) {
   const category = resolveAutopostCategory(rawCategory);
   const categoryStrategy = getAutopostCategoryStrategy(category);
@@ -3076,7 +2655,7 @@ app.post("/webhook", async (req, res) => {
         pendingImageRequests[chatId] = {
           topic: "startup signal",
           post,
-          imageConcept,
+          
           expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
         };
         await safeSendMessage(chatId, "✅ Post ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
@@ -3144,7 +2723,7 @@ app.post("/webhook", async (req, res) => {
           await safeSendMessage(chatId, `⚠️ Couldn't find live news for "${topic}". Writing from existing knowledge...`);
           const { post, imageConcept } = await runTopicPostPipeline(topic);
           await sendChunked(chatId, post);
-          pendingImageRequests[chatId] = { topic, post, imageConcept, expiresAt: Date.now() + PENDING_IMAGE_TTL_MS };
+          pendingImageRequests[chatId] = { topic, post,  expiresAt: Date.now() + PENDING_IMAGE_TTL_MS };
           await safeSendMessage(chatId, "✅ Post ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
         } else {
           // Show numbered headlines for user to pick
@@ -3173,10 +2752,9 @@ app.post("/webhook", async (req, res) => {
         pendingImageRequests[chatId] = {
           topic: goal,
           post: result.post,
-          imageConcept: result.imageConcept,
           expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
         };
-        await safeSendMessage(chatId, "✅ Research + post ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
+        await safeSendMessage(chatId, "✅ Research + post ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.");
 
       } else if (text.startsWith("/hooks ") || text === "/hooks") {
         // Usage: /hooks [region] [category]
@@ -3216,10 +2794,7 @@ app.post("/webhook", async (req, res) => {
         await shortenAndSendPost(chatId);
 
       } else if (text.toLowerCase() === "short no" || text.toLowerCase() === "/short no") {
-        await safeSendMessage(chatId, "Okay! Keeping the original post.\n\nWant an image? Reply YES to generate it.\n\nOr reply with feedback to rewrite it.");
-
-      } else if (text.toLowerCase() === "yes" || text.toLowerCase() === "/yes") {
-        await generateAndSendImage(chatId);
+        await safeSendMessage(chatId, "Okay! Keeping the original post.\n\nOr reply with feedback to rewrite it.");
 
       } else if (pendingTopicSelections[chatId]) {
         // User is picking headline(s) from the /post flow
@@ -3322,7 +2897,7 @@ app.post("/webhook", async (req, res) => {
           } else if (pending.flow === "topic") {
             const chosenHeadline = `${pending.chosen.title} (Source: ${pending.chosen.source})`;
             await safeSendMessage(chatId, `✅ Platforms: ${platforms.join(", ")}\n\n⏳ Running pipeline...`);
-            const { post, imageConcept } = await runTopicPostPipeline(chosenHeadline);
+            const { post } = await runTopicPostPipeline(chosenHeadline);
 
             let primaryPost = post;
             for (const platform of platforms) {
@@ -3336,14 +2911,13 @@ app.post("/webhook", async (req, res) => {
             pendingImageRequests[chatId] = {
               topic: pending.chosen.title,
               post: primaryPost,
-              imageConcept,
               expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
             };
             delete pendingPlatformSelections[chatId];
-            await safeSendMessage(chatId, "✅ Posts ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.\n\nWant an image? Reply YES to generate it.");
+            await safeSendMessage(chatId, "✅ Posts ready!\n\nReply with your feedback/pointers to rewrite the post.\n\nWant to make it short, crisp, and pointer-based with emotional lines? Reply SHORT YES or SHORT NO.");
           } else if (pending.flow === "autopost") {
             await safeSendMessage(chatId, `✅ Platforms: ${platforms.join(", ")}\n\n⏳ Running autopost pipeline...`);
-            const { post, source, chosenStory, imageConcept } = await buildAutopostPost(pending.chosen.title, {
+            const { post, source, chosenStory } = await buildAutopostPost(pending.chosen.title, {
               source: pending.chosen.source || pending.source || "News",
               region: pending.region,
             });
@@ -3361,7 +2935,7 @@ app.post("/webhook", async (req, res) => {
             pendingImageRequests[chatId] = {
               topic: chosenStory,
               post: primaryPost,
-              imageConcept,
+              
               expiresAt: Date.now() + PENDING_IMAGE_TTL_MS
             };
             delete pendingPlatformSelections[chatId];
@@ -3388,7 +2962,7 @@ app.post("/webhook", async (req, res) => {
                 pending.topics.map(async (topicData, i) => {
                   const topicPlatforms = pending.platformsSoFar[i];
                   try {
-                    let post, imageConcept, source, chosenStory;
+                    let post, source, chosenStory;
 
                     if (isAutopost) {
                       const result = await buildAutopostPost(topicData.chosen.title, {
@@ -3398,12 +2972,10 @@ app.post("/webhook", async (req, res) => {
                       post = result.post;
                       source = result.source;
                       chosenStory = result.chosenStory;
-                      imageConcept = result.imageConcept;
                     } else {
                       const chosenHeadline = `${topicData.chosen.title} (Source: ${topicData.chosen.source})`;
                       const result = await runTopicPostPipeline(chosenHeadline);
                       post = result.post;
-                      imageConcept = result.imageConcept;
                     }
 
                     let primaryPost = post;
@@ -3420,7 +2992,6 @@ app.post("/webhook", async (req, res) => {
                       index: i,
                       topic: isAutopost ? chosenStory : topicData.chosen.title,
                       post: primaryPost,
-                      imageConcept,
                       platforms: topicPlatforms,
                       platformPosts,
                       source: isAutopost ? source : null,
@@ -3449,7 +3020,6 @@ app.post("/webhook", async (req, res) => {
                   successfulPosts.push({
                     topic: r.topic,
                     post: r.post,
-                    imageConcept: r.imageConcept,
                     platforms: r.platforms,
                     source: r.source,
                     region: r.region,
@@ -3476,106 +3046,6 @@ app.post("/webhook", async (req, res) => {
       } else if (text.startsWith("/start") || text.startsWith("/help")) {
         await safeSendMessage(chatId, buildTelegramHelpText());
 
-      } else if (pendingFeedbackConfirmations[chatId]) {
-        // Handle YES/NO responses to feedback rewrite confirmations
-        const confirmation = pendingFeedbackConfirmations[chatId];
-        if (Date.now() > confirmation.expiresAt) {
-          delete pendingFeedbackConfirmations[chatId];
-          await safeSendMessage(chatId, "⏰ Confirmation expired. Please send your feedback again.");
-        } else {
-          const lowerText = text.trim().toLowerCase();
-          if (lowerText === "yes" || lowerText === "/yes" || lowerText === "y" || lowerText === "yep" || lowerText === "yeah") {
-            delete pendingFeedbackConfirmations[chatId];
-            if (confirmation.postIndex === null) {
-              // Single post
-              await rewriteWithFeedback(chatId, confirmation.feedback, true);
-            } else {
-              // Multi post
-              await rewriteMultiPostWithFeedback(chatId, confirmation.postIndex, confirmation.feedback, true);
-            }
-          } else if (lowerText === "no" || lowerText === "/no" || lowerText === "n" || lowerText === "nope" || lowerText === "cancel") {
-            delete pendingFeedbackConfirmations[chatId];
-            await safeSendMessage(
-              chatId,
-              `❌ Rewrite cancelled.\n\nSend your revised feedback when you're ready, or use the available commands.`
-            );
-          } else {
-            await safeSendMessage(
-              chatId,
-              `🤔 Please reply YES to proceed with the rewrite, or NO to cancel.\n\nPreview: ${confirmation.preview}`
-            );
-          }
-        }
-
-      } else if (pendingFeedbackClarifications[chatId]) {
-        // Handle clarification responses
-        const clarification = pendingFeedbackClarifications[chatId];
-        if (Date.now() > clarification.expiresAt) {
-          delete pendingFeedbackClarifications[chatId];
-          await safeSendMessage(chatId, "⏰ Clarification session expired. Please send your feedback again.");
-        } else {
-          delete pendingFeedbackClarifications[chatId];
-          const clarifiedText = text.trim();
-          
-          if (clarification.context === "multi-post-select") {
-            // User is responding to "which post is this for?"
-            const lowerText = clarifiedText.toLowerCase();
-            const multiPending = pendingMultiPostRequests[chatId];
-            
-            if (!multiPending || Date.now() > multiPending.expiresAt) {
-              await safeSendMessage(chatId, "⏰ Post session expired. Run the command again.");
-              return;
-            }
-            
-            if (lowerText === "all") {
-              // Apply to all posts — still go through confirmation
-              for (let i = 0; i < multiPending.posts.length; i++) {
-                await rewriteMultiPostWithFeedback(chatId, i, clarification.originalText, false);
-              }
-            } else {
-              // Try to parse a post number
-              const numMatch = clarifiedText.match(/^(?:post\s*)?(\d+)[\s:;-]/i) || clarifiedText.match(/^(\d+)$/);
-              if (numMatch) {
-                const postIndex = parseInt(numMatch[1], 10) - 1;
-                if (postIndex >= 0 && postIndex < multiPending.posts.length) {
-                  // Extract feedback after the number
-                  const feedbackParts = clarifiedText.split(/[\s:;-]/);
-                  const feedback = feedbackParts.length > 1 
-                    ? clarifiedText.replace(/^(?:post\s*)?\d+[\s:;-]*/, "").trim()
-                    : clarification.originalText;
-                  await rewriteMultiPostWithFeedback(chatId, postIndex, feedback || clarification.originalText, false);
-                } else {
-                  await safeSendMessage(chatId, `❌ Invalid post number. You have ${multiPending.posts.length} post(s). Please reply with a number between 1 and ${multiPending.posts.length}.`);
-                }
-              } else {
-                // No number found, assume it's for post 1
-                await rewriteMultiPostWithFeedback(chatId, 0, clarifiedText, false);
-              }
-            }
-          } else if (clarification.context === "multi-post") {
-            // User clarified vague feedback for multi-post
-            // Ask which post
-            const multiPending = pendingMultiPostRequests[chatId];
-            if (multiPending && Date.now() <= multiPending.expiresAt) {
-              await safeSendMessage(
-                chatId,
-                `📝 Thanks for clarifying! Now, which post is this for? Reply with the post number (1-${multiPending.posts.length}), or say "ALL".`
-              );
-              // Store the clarified text for the next step
-              pendingFeedbackClarifications[chatId] = {
-                originalText: clarifiedText,
-                context: "multi-post-select",
-                expiresAt: Date.now() + PENDING_CONFIRMATION_TTL_MS
-              };
-            } else {
-              await safeSendMessage(chatId, "⏰ Post session expired. Run the command again.");
-            }
-          } else if (clarification.context === "single-post") {
-            // User clarified vague feedback for single post — go through confirmation
-            await rewriteWithFeedback(chatId, clarifiedText, false);
-          }
-        }
-
       } else if (/^\d+$/.test(text.trim()) && pendingGreetingSelections[chatId]) {
         const pending = pendingGreetingSelections[chatId];
         if (Date.now() > pending.expiresAt) {
@@ -3600,41 +3070,7 @@ app.post("/webhook", async (req, res) => {
         } else {
           const cmd = parseMultiPostCommand(text);
           if (cmd) {
-            if (cmd.action === "image") {
-              if (cmd.all) {
-                // Generate images for all posts
-                await safeSendMessage(chatId, "🎨 Generating images for all posts...");
-                for (let i = 0; i < pending.posts.length; i++) {
-                  const postData = pending.posts[i];
-                  try {
-                    const imageBackgroundUrl = await callImageAPI(postData.imageConcept.visual);
-                    const imageUrl = await renderImageWithText(imageBackgroundUrl, postData.imageConcept);
-                    await sendPhoto(chatId, imageUrl, postData.post.slice(0, 1024));
-                    await safeSendMessage(chatId, `🧠 Post ${i + 1} Visual Spec\n\n${imageConceptToText(postData.imageConcept)}`);
-                  } catch (err) {
-                    console.error(`❌ [multi-image] Post ${i + 1} failed: ${err.message}`);
-                    await safeSendMessage(chatId, `❌ Image for post ${i + 1} failed: ${err.message}`);
-                  }
-                }
-              } else {
-                // Generate image for specific post
-                const postData = pending.posts[cmd.index];
-                if (!postData) {
-                  await safeSendMessage(chatId, `❌ Invalid post number. You have ${pending.posts.length} post(s).`);
-                } else {
-                  await safeSendMessage(chatId, `🎨 Generating image for post ${cmd.index + 1}...`);
-                  try {
-                    const imageBackgroundUrl = await callImageAPI(postData.imageConcept.visual);
-                    const imageUrl = await renderImageWithText(imageBackgroundUrl, postData.imageConcept);
-                    await sendPhoto(chatId, imageUrl, postData.post.slice(0, 1024));
-                    await safeSendMessage(chatId, `🧠 Post ${cmd.index + 1} Visual Spec\n\n${imageConceptToText(postData.imageConcept)}`);
-                  } catch (err) {
-                    console.error(`❌ [multi-image] Post ${cmd.index + 1} failed: ${err.message}`);
-                    await safeSendMessage(chatId, `❌ Image generation failed: ${err.message}`);
-                  }
-                }
-              }
-            } else if (cmd.action === "short") {
+            if (cmd.action === "short") {
               const postData = pending.posts[cmd.index];
               if (!postData) {
                 await safeSendMessage(chatId, `❌ Invalid post number. You have ${pending.posts.length} post(s).`);
@@ -3648,7 +3084,7 @@ app.post("/webhook", async (req, res) => {
                   postData.history.push({ action: "short", post: postData.post, at: Date.now() });
                   postData.post = newPost;
                   await sendChunked(chatId, `📰 Post ${cmd.index + 1} (shortened):\n\n${newPost}`);
-                  await safeSendMessage(chatId, `✅ Post ${cmd.index + 1} shortened!\n\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts`);
+                  await safeSendMessage(chatId, `✅ Post ${cmd.index + 1} shortened!\n\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp`);
                 } catch (err) {
                   console.error(`❌ [multi-short] Post ${cmd.index + 1} failed: ${err.message}`);
                   await safeSendMessage(chatId, `❌ Shorten failed: ${err.message}`);
@@ -4036,10 +3472,5 @@ app.get("/health", (_req, res) => {
   res.json({ ok: true, processing: isProcessing });
 });
 
-ensureFont().then(() => {
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
-}).catch((err) => {
-  console.error("Fatal error during startup:", err);
-  process.exit(1);
-});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
