@@ -595,6 +595,8 @@ function isShortenRequest(text) {
   const raw = String(text || "").trim().toLowerCase();
   // Explicitly reject "short no" before checking patterns
   if (raw === "short no" || raw === "/short no") return false;
+  // Reject "short <number>" — that's handled by multi-post parser
+  if (/^short\s+\d+$/.test(raw)) return false;
   if (["short yes", "/short yes", "/shorten", "shorten it", "make it short", "make it shorter", "short and crisp", "make it short and crisp", "short please", "crisp", "make it crisp", "shorter"].includes(raw)) {
     return true;
   }
@@ -3114,7 +3116,7 @@ app.post("/webhook", async (req, res) => {
                 };
                 await safeSendMessage(
                   chatId,
-                  `\n✅ ${successfulPosts.length} post(s) ready!\n\nCommands:\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts\n• Or send general feedback and I'll ask which post to apply it to`
+                  `\n✅ ${successfulPosts.length} post(s) ready!\n\nCommands:\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• Or send general feedback and I'll ask which post to apply it to`
                 );
               }
             }
