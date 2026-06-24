@@ -2058,7 +2058,49 @@ const pendingFeedbackClarifications = {};
 
 const PENDING_CONFIRMATION_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-// ─── FEEDBACK INTENT DETECTION ───────────────────────────────────────────────
+// ─── FEEDBACK INTENT DETECTION (LLM-Powered) ──────────────────────────────────
+
+async function detectFeedbackIntentWithLLM(text, context = {}) {
+  const prompt = [
+    "You are a feedback intent classifier for a LinkedIn content bot.",
+    "",
+    "Classify the user's message into exactly ONE of these categories:",
+    "",
+    "1. CASUAL — Thanks, praise, emoji, or brief acknowledgments (e.g., 'thanks', 'great', '👍', 'nice work')",
+    "2. QUESTION — User is asking something, not giving feedback (e.g., 'what sources?', 'how does this work?', 'can you explain?')",
+    "3. VAGUE_FEEDBACK — User wants changes but is not specific enough (e.g., 'make it better', 'more professional', 'shorter', 'improve it', 'fix it')",
+    "4. SPECIFIC_FEEDBACK — User gives clear, actionable feedback (e.g., 'make the hook about funding not product', 'add a stat about 40% growth', 'remove the second paragraph')",
+    "",
+    "Rules:",
+    "- If the message is just gratitude, praise, or emoji → CASUAL",
+    "- If it ends with '?' or asks for info → QUESTION",
+    "- If it asks for changes but lacks specifics → VAGUE_FEEDBACK",
+    "- If it describes exactly what to change → SPECIFIC_FEEDBACK",
+    "",
+    "Output ONLY the category name. No explanation. No quotes. Just one word.",
+    "",
+    `User message: "${text}"`,
+    context.hasMultiplePosts ? `Context: There are ${context.postCount} posts. User may need to specify which post.` : "Context: Single post active.",
+  ].join("\n");
+
+  try {
+    const result = await callDirectWithRetry(prompt, "feedback-intent-classifier");
+    const clean = String(result || "").trim().toLowerCase().replace(/[^a-z_]/g, "");
+    
+    if (clean.includes("casual")) return "casual";
+    if (clean.includes("question")) return "question";
+    if (clean.includes("vague")) return "vague_feedback";
+    if (clean.includes("specific")) return "specific_feedback";
+    
+    // Fallback to hardcoded if LLM returns something unexpected
+    return detectFeedbackIntentFallback(text);
+  } catch (err) {
+    console.warn(`⚠️ [feedback-intent] LLM failed: ${err.message}. Falling back to rule-based.`);
+    return detectFeedbackIntentFallback(text);
+  }
+}
+
+// ─── FALLBACK RULE-BASED INTENT DETECTION ─────────────────────────────────────
 
 const CASUAL_RESPONSES = new Set([
   "thanks", "thank you", "thx", "ty", "ok", "okay", "k", "kk",
@@ -2069,7 +2111,6 @@ const CASUAL_RESPONSES = new Set([
   "brilliant", "excellent", "superb", "lovely", "sweet", "fire", "lit",
   "👍", "👏", "🙏", "❤️", "💯", "🔥", "🎉", "👌", "🙌", "✅",
   "nice one", "well done", "good job", "gj", "gg",
-,
   "great job", "great work", "nice work", "well played", "good stuff",
   "love it", "loved it", "like it", "liked it", "appreciate it",
 ]);
@@ -2132,7 +2173,7 @@ function isVagueFeedback(text) {
   return false;
 }
 
-function detectFeedbackIntent(text) {
+function detectFeedbackIntentFallback(text) {
   if (isCasualResponse(text)) return "casual";
   if (isQuestion(text)) return "question";
   if (isVagueFeedback(text)) return "vague_feedback";
@@ -2325,13 +2366,13 @@ async function handleMultiPostFeedback(chatId, text) {
     return false;
   }
 
-  const intent = detectFeedbackIntent(text);
+  const intent = await detectFeedbackIntentWithLLM(text, { hasMultiplePosts: true, postCount: pending.posts.length });
 
   // Handle casual responses gracefully
   if (intent === "casual") {
     await safeSendMessage(
       chatId,
-      `😊 Glad you liked it!\n\nCommands available:\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp\n• IMAGE <number> — generate image for a post\n• IMAGE ALL — generate images for all posts`
+      `😊 Glad you liked it!\n\nCommands available:\n• REWRITE <number> <feedback> — rewrite a specific post\n• SHORT <number> — make a post short & crisp`
     );
     return true;
   }
@@ -2381,13 +2422,13 @@ async function handleSinglePostFeedback(chatId, text) {
     return false;
   }
 
-  const intent = detectFeedbackIntent(text);
+  const intent = await detectFeedbackIntentWithLLM(text, { hasMultiplePosts: false });
 
   // Handle casual responses gracefully
   if (intent === "casual") {
     await safeSendMessage(
       chatId,
-      `😊 Thanks! Your post is ready.\n\n• Reply SHORT YES to make it short & crisp\n• Reply YES to generate an image\n• Or send more feedback to keep refining.`
+      `😊 Thanks! Your post is ready.\n\n• Reply SHORT YES to make it short & crisp\n• Or send more feedback to keep refining.`
     );
     return true;
   }
